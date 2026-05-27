@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  password      String?
+  image         String?
+  emailVerified Boolean   @default(false)
+  provider      String    @default("email")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  holdings      Holding[]
+}
+
+model Holding {
+  id           String   @id @default(cuid())
+  symbol       String   @unique // EGX ticker symbol (e.g., "CIB", "ORWE")
+  name         String   // Full company name
+  shares       Int      // Number of shares held (positive)
+  avgCost      Float    // Weighted average cost per share (EGP)
+  purchaseDate DateTime @default(now()) // Date the position was purchased
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  transactions Transaction[]
+
+  @@index([symbol])
+  @@index([purchaseDate])
+}
+
+model Transaction {
+  id        String   @id @default(cuid())
+  holdingId String
+  type      String   // "BUY" or "SELL"
+  shares    Int      // Number of shares (always positive)
+  price     Float    // Price per share at execution (EGP)
+  total     Float    // Total cost/proceeds (price * shares)
+  date      DateTime // Transaction date
+  notes     String?  // Optional notes
+  createdAt DateTime @default(now())
+
+  holding   Holding  @relation(fields: [holdingId], references: [id], onDelete: Cascade)
+
+  @@index([holdingId])
+  @@index([date])
+}
