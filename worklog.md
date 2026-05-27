@@ -40,3 +40,53 @@
 **File:** `src/app/api/market-data/live/route.ts`
 - Verified that the live endpoint already returns `marketStatus` in its response. No changes needed.
 - The `getMarketStatus()` function correctly uses Cairo/Egypt timezone and handles EGX hours (Sun-Thu 10:00-14:45) and Gold/Forex hours.
+
+---
+
+## 2025-05-28 — Support & Resistance (Pivot Points) Feature
+
+### Change 5: Technical Analysis API Route
+**File:** `src/app/api/market-data/technical-analysis/route.ts` (NEW)
+- Created new API endpoint `/api/market-data/technical-analysis`
+- Calculates 3 types of pivot points from TradingView OHLC data:
+  - **Classic**: PP, S1-S3, R1-R3
+  - **Fibonacci**: PP, S1-S3, R1-R3 (0.382/0.618/1.000 ratios)
+  - **Camarilla**: S1-S4, R1-R4 (1.1 multiplier)
+- Also includes 52-week high/low from TradingView
+- Finds nearest support (highest level below price) and nearest resistance (lowest level above price) across all calculation methods
+- Accepts `?symbols=COMI,HDBK` or `?all=true` for all 220 EGX stocks
+- Uses 60s server-side cache (same as `fetchQuotesFull`)
+- Uses existing `fetchQuotesFull()` which provides OHLC + 52w data
+
+### Change 6: S&R Tab in Charts Section
+**File:** `src/app/page.tsx`
+- Added new "S&R" tab to the Charts section (now 5 tabs: Performance, Allocation, P&L, Benchmark, S&R)
+- Shows scrollable table of all EGX stocks with:
+  - Stock symbol + sector
+  - Current price
+  - Nearest support (green, with % distance below price)
+  - Nearest resistance (red, with % distance above price)
+  - Classic pivot point (PP)
+  - Classic S1, S2 support levels
+  - Classic R1, R2 resistance levels
+  - 52-week low and high
+- Sorted by current price (highest first)
+- Responsive: hides columns on smaller screens (md/lg/xl breakpoints)
+- Sticky table header for scroll
+
+### Change 7: Nearest S&R in Holdings Table
+**File:** `src/app/page.tsx`
+- Added two new columns to the Holdings table (visible on lg+ screens):
+  - **Support** (green, down arrow): Shows nearest support level with % distance below current price
+  - **Resistance** (red, up arrow): Shows nearest resistance level with % distance above current price
+- Data sourced from `taData` state, populated by the technical-analysis API
+
+### Change 8: Data Fetching Integration
+**File:** `src/app/page.tsx`
+- Added `taData` and `taLoading` state
+- Integrated technical analysis fetch into `fetchComprehensive()` (runs every 60s)
+- Fetches all stocks via `?all=true` parameter
+- New imports: `Shield`, `ArrowDown`, `ArrowUp` icons from lucide-react
+
+### Commit: f342e2b
+Pushed to: `https://github.com/tiksahertok-ui/zizsaherstock.git` (main)
