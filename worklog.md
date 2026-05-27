@@ -90,3 +90,42 @@
 
 ### Commit: f342e2b
 Pushed to: `https://github.com/tiksahertok-ui/zizsaherstock.git` (main)
+
+---
+
+## 2025-05-28 — Review Gold Prices & Market Status
+
+### Task: Review all gold prices and market status logic
+
+**Reviewed:**
+1. **Gold USD (XAUUSD)**: TradingView real-time via `fetchQuotesLive` — working correctly
+2. **Gold EGP (24K, 21K)**: Scraped from gold-price-live.com via `scrapeGoldPriceLive()` — buy price used as main price
+3. **USD/EGP**: TradingView primary, Google Finance fallback — working correctly
+4. **Gold Pound**: Scraped from gold-price-live.com — working correctly
+5. **Market Status**: Checked holiday list, day-of-week logic, and time windows
+
+### Critical Bug Found & Fixed: Holiday-Aware Market Status in Live Route
+
+**File:** `src/app/api/market-data/live/route.ts`
+
+**Problem:** The `/api/market-data/live` endpoint (polled every 1 second) had a simplified `getMarketStatus()` that did NOT check Egyptian holidays. Since `fetchLiveData()` in page.tsx overwrites `extrasData.marketStatus` every second (line 542), it was overriding the correct holiday-aware status from the extras API.
+
+**Impact:** Today is May 28, 2026 (Eid Al-Adha Day 2). Without this fix:
+- EGX would incorrectly show as "live" during holidays
+- Gold retail (Egyptian market) would show "live" during holidays
+- Forex/banks would show "live" during holidays
+
+**Fix:** Added the full `EGYPTIAN_HOLIDAYS` list (2025-2026) and `isEgyptianHoliday()` function to the live route, matching the extras route's logic exactly. Now both routes return consistent, holiday-aware market status:
+- `egx`: Closed on Fri, Sat, holidays, outside 10:00-14:45
+- `gold`: Closed only on holidays
+- `globalGold`: Closed only on Saturday
+- `forex`: Closed on Fri, Sat, holidays
+
+**Verified correct market status for today (Thu May 28, 2026 - Eid Al-Adha Day 2):**
+- EGX: **CLOSED** (holiday) ✓
+- Gold retail: **CLOSED** (holiday) ✓
+- Global Gold (TradingView): **LIVE** (Thursday, not Saturday) ✓
+- Forex/Banks: **CLOSED** (holiday) ✓
+
+### Commit: 8d4b54d
+Pushed to: `https://github.com/tiksahertok-ui/zizsaherstock.git` (main)
