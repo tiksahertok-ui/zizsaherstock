@@ -2473,9 +2473,6 @@ function PortfolioDashboard() {
                                 </div>
                               </TableHead>
                               {/* Pivot Source & Indicators */}
-                              <TableHead className="text-right min-w-[85px] hidden xl:table-cell">
-                                <span className="text-[9px] font-medium">Pivot Source</span>
-                              </TableHead>
                               <TableHead className="text-right min-w-[60px] hidden xl:table-cell">
                                 <span className="text-[9px] font-medium">SMA 50</span>
                               </TableHead>
@@ -2503,10 +2500,7 @@ function PortfolioDashboard() {
                                   <span className="text-[8px] font-normal text-muted-foreground">far support</span>
                                 </div>
                               </TableHead>
-                              {/* Support Source & Indicators */}
-                              <TableHead className="text-right min-w-[85px] hidden xl:table-cell">
-                                <span className="text-[9px] font-medium">Pivot Source</span>
-                              </TableHead>
+                              {/* Indicators */}
                               <TableHead className="text-right min-w-[55px] hidden xl:table-cell">
                                 <span className="text-[9px] font-medium">BB Lower</span>
                               </TableHead>
@@ -2546,37 +2540,48 @@ function PortfolioDashboard() {
                                 const s2 = ta.supports[1] || null;
                                 const s3 = ta.supports[2] || null;
 
+                                const sourceColorMap: Record<string, string> = {
+                                  'SMA': 'bg-blue-500/20 text-blue-400',
+                                  'EMA': 'bg-violet-500/20 text-violet-400',
+                                  'BB': 'bg-orange-500/20 text-orange-400',
+                                  'Classic': 'bg-sky-500/20 text-sky-400',
+                                  'Fibonacci': 'bg-purple-500/20 text-purple-400',
+                                  'Camarilla': 'bg-amber-500/20 text-amber-400',
+                                  'Woodie': 'bg-teal-500/20 text-teal-400',
+                                  '52W': 'bg-rose-500/20 text-rose-400',
+                                };
+
+                                const getSourceTag = (source: string) => {
+                                  const key = Object.keys(sourceColorMap).find(k => source.includes(k)) || '';
+                                  const cls = sourceColorMap[key] || 'bg-muted text-muted-foreground';
+                                  // Abbreviate: 'SMA 50' → 'S50', 'Camarilla R1' → 'Cam.R1', etc.
+                                  let label = source;
+                                  if (source.startsWith('Classic')) label = 'Cl.' + source.slice(7);
+                                  else if (source.startsWith('Fibonacci')) label = 'Fib.' + source.slice(10);
+                                  else if (source.startsWith('Camarilla')) label = 'Cam.' + source.slice(9);
+                                  else if (source.startsWith('Woodie')) label = 'Wd.' + source.slice(6);
+                                  else if (source.startsWith('BB ')) label = source;
+                                  else if (source.startsWith('52W ')) label = source;
+                                  return <span className={`inline-block px-0.5 rounded text-[7px] leading-tight ${cls}`}>{label}</span>;
+                                };
+
                                 const renderSR = (level: typeof r1, type: 'r' | 's', highlight = false) => {
                                   if (!level || level.price <= 0) return <span className="text-muted-foreground/60">—</span>;
                                   const pct = price > 0 ? ((level.price - price) / price * 100).toFixed(1) : '0';
-                                  const strengthDots = level.strength >= 4 ? '●●●●●' : level.strength >= 3 ? '●●●' : level.strength >= 2 ? '●●' : '●';
+                                  const sources = level.source.split(', ').slice(0, 3);
                                   return (
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className={`font-mono ${highlight ? 'font-semibold' : ''}`}>
+                                    <div className="flex flex-col items-end gap-0.5" title={`${level.source} (str: ${level.strength}/5)`}>
+                                      <span className={`font-mono text-xs ${highlight ? 'font-semibold' : ''}`}>
                                         {fmtCurrency(level.price)}
                                       </span>
                                       <div className="flex items-center gap-1">
-                                        <span className="text-[9px] text-muted-foreground">
+                                        <span className="text-[8px] text-muted-foreground">
                                           {type === 'r' ? '+' : ''}{pct}%
                                         </span>
-                                        <span className="text-[7px] text-amber-500/70" title={`Confluence: ${level.strength}/5 — ${level.source}`}>
-                                          {strengthDots}
+                                        <span className="flex items-center gap-px">
+                                          {sources.map((s, i) => <span key={i}>{getSourceTag(s)}</span>)}
                                         </span>
                                       </div>
-                                    </div>
-                                  );
-                                };
-
-                                const renderSource = (level: typeof r1) => {
-                                  if (!level) return <span className="text-muted-foreground/60">—</span>;
-                                  return (
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className="text-[9px] text-muted-foreground leading-tight">{level.source}</span>
-                                      <span className="text-[8px] text-amber-500/60" title={`Strength: ${level.strength}/5`}>
-                                        {Array.from({ length: 5 }, (_, i) => (
-                                          <span key={i}>{i < level.strength ? '◆' : '◇'}</span>
-                                        )).join('')}
-                                      </span>
                                     </div>
                                   );
                                 };
@@ -2663,10 +2668,6 @@ function PortfolioDashboard() {
                                     <TableCell className="text-right font-mono text-xs text-red-600 dark:text-red-400 font-medium">
                                       {renderSR(r1, 'r', true)}
                                     </TableCell>
-                                    {/* Resistance Source */}
-                                    <TableCell className="text-right hidden xl:table-cell">
-                                      {renderSource(r1)}
-                                    </TableCell>
                                     {/* SMA 50 */}
                                     <TableCell className="text-right font-mono text-[11px] hidden xl:table-cell">
                                       {ta.ma.sma50 > 0 ? (
@@ -2698,10 +2699,6 @@ function PortfolioDashboard() {
                                     {/* S3 (far support) */}
                                     <TableCell className="text-right font-mono text-xs text-emerald-400/80">
                                       {renderSR(s3, 's')}
-                                    </TableCell>
-                                    {/* Support Source */}
-                                    <TableCell className="text-right hidden xl:table-cell">
-                                      {renderSource(s1)}
                                     </TableCell>
                                     {/* BB Lower */}
                                     <TableCell className="text-right font-mono text-[11px] text-cyan-500/70 hidden xl:table-cell">
