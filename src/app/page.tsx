@@ -212,6 +212,65 @@ interface ExtrasData {
   };
 }
 
+// ── Client-Side Price Change Tracking (localStorage) ──────────────
+// Tracks the FIRST price of each day for gold EGP items and USD/EGP.
+// Computes daily change purely from Egyptian source prices.
+// Survives serverless cold starts and page refreshes.
+
+interface PriceChange {
+  changeAbs: number;
+  changePercent: number;
+}
+
+const PRICE_CHANGE_PREFIX = 'egx-daily-open:';
+
+/** Get today's date string in Egypt timezone */
+function getEgyptTodayStr(): string {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' })).toISOString().split('T')[0];
+}
+
+/** Compute price change from localStorage-tracked open price */
+function computeDailyChange(storageKey: string, currentPrice: number): PriceChange {
+  if (!currentPrice || currentPrice <= 0) return { changeAbs: 0, changePercent: 0 };
+
+  const storedOpen = localStorage.getItem(storageKey);
+  if (!storedOpen) {
+    // First price of the day — store it as the open reference
+    localStorage.setItem(storageKey, String(currentPrice));
+    return { changeAbs: 0, changePercent: 0 };
+  }
+
+  const openPrice = parseFloat(storedOpen);
+  if (openPrice > 0) {
+    const changeAbs = Math.round((currentPrice - openPrice) * 100) / 100;
+    const changePercent = Math.round((changeAbs / openPrice) * 10000) / 100;
+    return { changeAbs, changePercent };
+  }
+
+  return { changeAbs: 0, changePercent: 0 };
+}
+
+/** Clean up old localStorage entries (older than 2 days) to prevent bloat */
+function cleanupOldDailyEntries() {
+  const now = new Date();
+  const twoDaysAgo = new Date(now);
+  twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+  const cutoff = twoDaysAgo.toISOString().split('T')[0];
+
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(PRICE_CHANGE_PREFIX)) {
+      // Extract date from key: "egx-daily-open:2026-05-28:24k"
+      const datePart = key.replace(PRICE_CHANGE_PREFIX, '').split(':')[0];
+      if (datePart < cutoff) {
+        keysToRemove.push(key);
+      }
+    }
+  }
+  keysToRemove.forEach(k => localStorage.removeItem(k));
+}
+
 // ── Formatting Helpers ───────────────────────────────────────────
 
 function fmtCurrency(value: number): string {
@@ -343,6 +402,10 @@ function PortfolioDashboard() {
   const [taLoading, setTaLoading] = useState(false);
   const [srSearch, setSrSearch] = useState('');
 
+  // ── Client-side price change tracking (gold EGP + USD/EGP from Egyptian sources) ──
+  const [goldEgpChanges, setGoldEgpChanges] = useState<Record<string, PriceChange>>({});
+  const [usdEgpClientChange, setUsdEgpClientChange] = useState<PriceChange>({ changeAbs: 0, changePercent: 0 });
+
   // UI state
   const [loading, setLoading] = useState(true);
   const [hydrated, setHydrated] = useState(false);
@@ -400,6 +463,46 @@ function PortfolioDashboard() {
       worstPerformer: sorted[sorted.length - 1] ? { symbol: sorted[sorted.length - 1].symbol, name: sorted[sorted.length - 1].name, pnlPercent: sorted[sorted.length - 1].pnlPercent, pnl: sorted[sorted.length - 1].pnl } : null,
     };
   }, [holdings]);
+
+  // ── Client-side gold EGP + USD/EGP change tracking (localStorage) ──
+  // Tracks the first price of each day and computes daily change.
+  // 100% based on Egyptian source prices (gold-price-live.com for gold).
+  useEffect(() => {
+    if (!extrasData || typeof window === 'undefined') return;
+
+    const today = getEgyptTodayStr();
+    const changes: Record<string, PriceChange> = {};
+
+    // Gold EGP items — tracked from Egyptian source prices only
+    const goldItems: Array<{ key: string; price: number }> = [
+      { key: '24k', price: extrasData.gold.perGram24kEgp },
+      { key: '21k', price: extrasData.gold.perGram21kEgp },
+      { key: 'pound', price: extrasData.gold.goldPoundEgp || 0 },
+      { key: 'ounce', price: extrasData.gold.ounceEgp || 0 },
+    ];
+
+    // Add other karats if available
+    if (extrasData.gold.karats['22']?.price) goldItems.push({ key: '22k', price: extrasData.gold.karats['22'].price });
+    if (extrasData.gold.karats['18']?.price) goldItems.push({ key: '18k', price: extrasData.gold.karats['18'].price });
+
+    for (const item of goldItems) {
+      if (item.price > 0) {
+        const storageKey = `${PRICE_CHANGE_PREFIX}${today}:gold-${item.key}`;
+        changes[item.key] = computeDailyChange(storageKey, item.price);
+      }
+    }
+
+    setGoldEgpChanges(changes);
+
+    // USD/EGP — tracked as fallback when server returns 0 change
+    if (extrasData.usdEgp.rate > 0) {
+      const usdKey = `${PRICE_CHANGE_PREFIX}${today}:usdegp`;
+      setUsdEgpClientChange(computeDailyChange(usdKey, extrasData.usdEgp.rate));
+    }
+
+    // Cleanup old entries (run once per hour max)
+    if (Math.random() < 0.001) cleanupOldDailyEntries();
+  }, [extrasData]);
 
   // ── Database Setup Check ───────────────────────────────────
   useEffect(() => {
@@ -1650,39 +1753,37 @@ function PortfolioDashboard() {
                 {/* Row 2: USD/EGP + Gold */}
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3">
 
-                  {/* USD/EGP Rate */}
-                  {extrasData && extrasData.usdEgp.rate > 0 && (
+                  {/* USD/EGP Rate — uses server change (TradingView/Google) or client-side fallback */}
+                  {extrasData && extrasData.usdEgp.rate > 0 && (() => {
+                    // Use server-provided change when available, fall back to client-side tracking
+                    const serverChange = extrasData.usdEgp.changePercent !== 0 ? extrasData.usdEgp.changePercent : usdEgpClientChange.changePercent;
+                    const serverAbs = extrasData.usdEgp.changePercent !== 0 ? extrasData.usdEgp.changeAbs : usdEgpClientChange.changeAbs;
+                    return (
                     <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg border bg-card">
                       <div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-xs sm:text-sm font-semibold" style={{ color: TICKER_NAME_COLORS['USD/EGP'] }}>USD/EGP</span>
                           {extrasData?.marketStatus ? (
                             <StatusBadge status={extrasData.marketStatus.forex} />
-                          ) : extrasData.usdEgp.source ? (
-                            <span className="text-[9px] px-1 py-0 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 font-medium">LIVE</span>
                           ) : null}
                         </div>
-                        <div className="text-base sm:text-lg font-bold">
+                        <div className={`text-base sm:text-lg font-bold ${pnlColor(serverAbs)}`}>
                           {fmtNumber(extrasData.usdEgp.rate)}
                         </div>
                       </div>
-                      <div className={`text-right ${pnlColor(extrasData.usdEgp.changeAbs)}`}>
-                        {extrasData.usdEgp.hasChangeData && (
-                          <>
-                            <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(extrasData.usdEgp.changePercent)}</div>
-                            <div className="text-[10px] sm:text-xs">{extrasData.usdEgp.changeAbs >= 0 ? '+' : ''}{fmtNumber(extrasData.usdEgp.changeAbs)}</div>
-                          </>
+                      <div className={`text-right ${pnlColor(serverAbs)}`}>
+                        <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(serverChange)}</div>
+                        {serverAbs !== 0 && (
+                          <div className="text-[10px] sm:text-xs">{serverAbs >= 0 ? '+' : ''}{fmtNumber(serverAbs)}</div>
                         )}
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
 
-                  {/* Gold 24K per gram (EGP) — source: gold-price-live.com */}
+                  {/* Gold 24K per gram (EGP) — source: gold-price-live.com, change from Egyptian prices only */}
                   {extrasData && extrasData.gold.perGram24kEgp > 0 && (() => {
-                    const k24 = extrasData.gold.karats['24'];
-                    const k24Change = k24?.change || 0;
-                    const k24ChangePercent = k24?.changePercent ?? (k24Change !== 0 && extrasData.gold.perGram24kEgp > 0
-                      ? Math.round((k24Change / extrasData.gold.perGram24kEgp) * 10000) / 100 : 0);
+                    const ch = goldEgpChanges['24k'] || { changeAbs: 0, changePercent: 0 };
                     return (
                     <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg border bg-card">
                       <Gem className="h-4 w-4 text-yellow-500 shrink-0" />
@@ -1693,7 +1794,7 @@ function PortfolioDashboard() {
                             <StatusBadge status={extrasData.marketStatus.gold} />
                           ) : null}
                         </div>
-                        <div className={`text-base sm:text-lg font-bold ${pnlColor(k24ChangePercent)}`}>
+                        <div className={`text-base sm:text-lg font-bold ${pnlColor(ch.changePercent)}`}>
                           {fmtNumber(extrasData.gold.perGram24kEgp)} <span className="text-[10px] sm:text-xs font-normal text-muted-foreground">EGP/g</span>
                         </div>
                         {extrasData.gold.perGram24kHigh > 0 && (
@@ -1702,22 +1803,19 @@ function PortfolioDashboard() {
                           </div>
                         )}
                       </div>
-                      <div className={`text-right ${pnlColor(k24ChangePercent)}`}>
-                        <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(k24ChangePercent)}</div>
-                        {k24Change !== 0 && (
-                          <div className="text-[10px] sm:text-xs">{k24Change >= 0 ? '+' : ''}{fmtNumber(k24Change)}</div>
+                      <div className={`text-right ${pnlColor(ch.changePercent)}`}>
+                        <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(ch.changePercent)}</div>
+                        {ch.changeAbs !== 0 && (
+                          <div className="text-[10px] sm:text-xs">{ch.changeAbs >= 0 ? '+' : ''}{fmtNumber(ch.changeAbs)}</div>
                         )}
                       </div>
                     </div>
                     );
                   })()}
 
-                  {/* Gold 21K per gram (EGP) — source: gold-price-live.com */}
+                  {/* Gold 21K per gram (EGP) — source: gold-price-live.com, change from Egyptian prices only */}
                   {extrasData && extrasData.gold.perGram21kEgp > 0 && (() => {
-                    const k21 = extrasData.gold.karats['21'];
-                    const k21Change = k21?.change || 0;
-                    const k21ChangePercent = k21?.changePercent ?? (k21Change !== 0 && extrasData.gold.perGram21kEgp > 0
-                      ? Math.round((k21Change / extrasData.gold.perGram21kEgp) * 10000) / 100 : 0);
+                    const ch = goldEgpChanges['21k'] || { changeAbs: 0, changePercent: 0 };
                     return (
                     <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg border bg-card">
                       <Gem className="h-4 w-4 text-yellow-500 shrink-0" />
@@ -1728,7 +1826,7 @@ function PortfolioDashboard() {
                             <StatusBadge status={extrasData.marketStatus.gold} />
                           ) : null}
                         </div>
-                        <div className={`text-base sm:text-lg font-bold ${pnlColor(k21ChangePercent)}`}>
+                        <div className={`text-base sm:text-lg font-bold ${pnlColor(ch.changePercent)}`}>
                           {fmtNumber(extrasData.gold.perGram21kEgp)} <span className="text-[10px] sm:text-xs font-normal text-muted-foreground">EGP/g</span>
                         </div>
                         {extrasData.gold.perGram21kHigh > 0 && (
@@ -1737,10 +1835,10 @@ function PortfolioDashboard() {
                           </div>
                         )}
                       </div>
-                      <div className={`text-right ${pnlColor(k21ChangePercent)}`}>
-                        <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(k21ChangePercent)}</div>
-                        {k21Change !== 0 && (
-                          <div className="text-[10px] sm:text-xs">{k21Change >= 0 ? '+' : ''}{fmtNumber(k21Change)}</div>
+                      <div className={`text-right ${pnlColor(ch.changePercent)}`}>
+                        <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(ch.changePercent)}</div>
+                        {ch.changeAbs !== 0 && (
+                          <div className="text-[10px] sm:text-xs">{ch.changeAbs >= 0 ? '+' : ''}{fmtNumber(ch.changeAbs)}</div>
                         )}
                       </div>
                     </div>
@@ -1749,7 +1847,7 @@ function PortfolioDashboard() {
 
 
 
-                  {/* Gold (USD per ounce) — source: TradingView XAUUSD */}
+                  {/* Gold (USD per ounce) — source: TradingView XAUUSD (international) */}
                   {extrasData && extrasData.gold.usdPrice > 0 && (
                     <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg border bg-card">
                       <Gem className="h-4 w-4 text-yellow-500 shrink-0" />
@@ -1771,10 +1869,9 @@ function PortfolioDashboard() {
                     </div>
                   )}
 
-                  {/* Gold Pound (جنيه الذهب) — source: gold-price-live.com */}
+                  {/* Gold Pound (جنيه الذهب) — source: gold-price-live.com, change from Egyptian prices only */}
                   {extrasData && extrasData.gold.goldPoundEgp && extrasData.gold.goldPoundEgp > 0 && (() => {
-                    const pndChangePercent = extrasData.gold.poundChangePercent || 0;
-                    const pndChangeAbs = extrasData.gold.poundChangeAbs || 0;
+                    const ch = goldEgpChanges['pound'] || { changeAbs: 0, changePercent: 0 };
                     return (
                     <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg border bg-card">
                       <Gem className="h-4 w-4 text-yellow-500 shrink-0" />
@@ -1785,14 +1882,14 @@ function PortfolioDashboard() {
                             <StatusBadge status={extrasData.marketStatus.gold} />
                           ) : null}
                         </div>
-                        <div className={`text-base sm:text-lg font-bold ${pnlColor(pndChangePercent)}`}>
+                        <div className={`text-base sm:text-lg font-bold ${pnlColor(ch.changePercent)}`}>
                           {fmtNumber(extrasData.gold.goldPoundEgp)} <span className="text-[10px] sm:text-xs font-normal text-muted-foreground">EGP</span>
                         </div>
                       </div>
-                      <div className={`text-right ${pnlColor(pndChangePercent)}`}>
-                        <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(pndChangePercent)}</div>
-                        {pndChangeAbs !== 0 && (
-                          <div className="text-[10px] sm:text-xs">{pndChangeAbs >= 0 ? '+' : ''}{fmtNumber(pndChangeAbs)}</div>
+                      <div className={`text-right ${pnlColor(ch.changePercent)}`}>
+                        <div className="text-[10px] sm:text-xs font-medium">{fmtPercent(ch.changePercent)}</div>
+                        {ch.changeAbs !== 0 && (
+                          <div className="text-[10px] sm:text-xs">{ch.changeAbs >= 0 ? '+' : ''}{fmtNumber(ch.changeAbs)}</div>
                         )}
                       </div>
                     </div>
