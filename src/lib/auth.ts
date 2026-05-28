@@ -28,6 +28,7 @@ export async function getAuthenticatedUser(
     const token = authHeader.slice(7);
     if (!token) return null;
 
+    if (!supabase) return null;
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data.user) {
       console.warn('Auth validation failed:', error?.message);
