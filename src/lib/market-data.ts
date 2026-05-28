@@ -129,10 +129,10 @@ const TECH_COLUMNS = [
   "Pivot.M.Woodie.R1", "Pivot.M.Woodie.R2", "Pivot.M.Woodie.R3",
 ];
 
-// ── SHARED LIVE CACHE (1s TTL) ─────────────────────────────────
+// ── SHARED LIVE CACHE (5s TTL) ─────────────────────────────────
 // Per-symbol cache: symbol → { quoteData, ts }
 const liveCache = new Map<string, { data: QuoteData; ts: number }>();
-const LIVE_CACHE_TTL = 1_000; // 1 second
+const LIVE_CACHE_TTL = 5_000; // 5 seconds
 
 // ── In-flight deduplication ───────────────────────────────────
 // Prevents duplicate TradingView requests when multiple callers

@@ -465,9 +465,9 @@ function PortfolioDashboard() {
     return () => window.clearTimeout(timer);
   }, [fetchAll, hydrated, profile]);
 
-  // ── LIVE data polling (every 1s) ──
+  // ── LIVE data polling (every 5s) ──
   // Fetches holdings with fresh prices + indices + gold + USD/EGP
-  // All share the same 1s TradingView cache — no duplicate fetches
+  // All share the same 5s TradingView cache — no duplicate fetches
   const fetchLiveData = useCallback(async () => {
     try {
       const indexSymbols = 'EGX30,EGX70_EWI,EGX100_EWI';
@@ -628,12 +628,12 @@ function PortfolioDashboard() {
   }, [holdings.length]);
 
   // ── Polling schedule ──
-  // Live data (holdings + indices + gold + USD/EGP): every 1 second
+  // Live data (holdings + indices + gold + USD/EGP): every 5 seconds
   // Comprehensive (extras + stocks + performance): every 60 seconds
   // Also run comprehensive immediately on mount/holdings change
   useEffect(() => {
     const firstRun = window.setTimeout(() => void fetchComprehensive(), 0);
-    const liveInterval = setInterval(fetchLiveData, 1_000);
+    const liveInterval = setInterval(fetchLiveData, 5_000);
     const compInterval = setInterval(fetchComprehensive, 60_000);
     return () => {
       clearTimeout(firstRun);
