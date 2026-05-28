@@ -13,49 +13,10 @@ async function getZai() {
 // ── In-memory rate history for USD/EGP change tracking ──
 const rateHistory: Map<string, number> = new Map();
 
-// ── In-memory EGP gold price history (per karat + ounce + pound) ──
-// Stores the FIRST price seen each day as the "open" reference.
-// Map key: "DATE:k24" -> 7714, "DATE:k21" -> 6750, etc.
-const goldEgpHistory: Map<string, number> = new Map();
-let goldEgpHistoryDate = ""; // Track which date is stored, reset on new day
-
-/**
- * Track EGP gold price — stores the first price of the day as reference.
- * Returns { changeAbs, changePercent } compared to today's open price,
- * or yesterday's closing price if we have it.
- */
-function trackGoldEgpChange(
-  key: string,
-  currentPrice: number
-): { changeAbs: number; changePercent: number } {
-  const today = getTodayStr();
-  const fullKey = `${today}:${key}`;
-
-  // Reset history on new day
-  if (goldEgpHistoryDate !== today) {
-    if (goldEgpHistoryDate) {
-      // New day started — clear old data
-      goldEgpHistory.clear();
-    }
-    goldEgpHistoryDate = today;
-  }
-
-  const prevPrice = goldEgpHistory.get(fullKey);
-
-  // Store first price of the day as reference
-  if (!prevPrice && currentPrice > 0) {
-    goldEgpHistory.set(fullKey, currentPrice);
-    return { changeAbs: 0, changePercent: 0 };
-  }
-
-  if (prevPrice > 0 && currentPrice > 0) {
-    const changeAbs = Math.round((currentPrice - prevPrice) * 100) / 100;
-    const changePercent = Math.round((changeAbs / prevPrice) * 10000) / 100;
-    return { changeAbs, changePercent };
-  }
-
-  return { changeAbs: 0, changePercent: 0 };
-}
+// ── Gold EGP change is now computed from gold USD change + USD/EGP change ──
+// Formula: EGP_price ≈ USD_price × USD/EGP_rate
+// So: EGP_change% = (1 + goldUSD_change%) × (1 + usdEgp_change%) - 1
+// This is reliable across serverless cold starts unlike in-memory tracking.
 
 function toNum(v: number | string | null | undefined): number {
   if (v == null) return 0;
@@ -64,7 +25,7 @@ function toNum(v: number | string | null | undefined): number {
 }
 
 function getTodayStr(): string {
-  return new Date().toISOString().split("T")[0];
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' })).toISOString().split("T")[0];
 }
 
 /**
@@ -330,38 +291,129 @@ async function scrapeGoldPriceLive(): Promise<{
 }
 
 /**
- * SOURCE 3 (Fallback): Google Finance — for USD/EGP
+ * SOURCE 3 (Fallback): Multiple sources for USD/EGP change data
+ * Tries: 1) Direct Google Finance fetch, 2) page_reader fallback, 3) yfinance-style API
  */
 async function fetchUsdEgpFromGoogleFinance(): Promise<{
   rate: number;
   changePercent: number;
   changeAbs: number;
 }> {
+  const empty = { rate: 0, changePercent: 0, changeAbs: 0 };
+
+  // Strategy 1: Direct fetch from Google Finance (fastest)
+  try {
+    const res = await fetch("https://www.google.com/finance/quote/USD-EGP", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const parsed = parseGoogleFinanceHTML(html);
+      if (parsed.rate > 0) return parsed;
+    }
+  } catch (err) {
+    console.warn("[Google Finance] Direct fetch failed:", err);
+  }
+
+  // Strategy 2: page_reader fallback (headless browser)
   try {
     const zai = await getZai();
-
     const result = await zai.functions.invoke("page_reader", {
       url: "https://www.google.com/finance/quote/USD-EGP",
     });
-
     const html: string = result?.data?.html || "";
+    if (html.length > 1000) {
+      const parsed = parseGoogleFinanceHTML(html);
+      if (parsed.rate > 0) return parsed;
+    }
+  } catch (err) {
+    console.warn("[Google Finance] page_reader failed:", err);
+  }
 
-    const match = html.match(
-      /United States Dollar\s*\/\s*Egyptian Pound\s+(\d+[\.\d]+).*?([+-][\d.]+)%.*?\(\s*([+-][\d.]+)\s*\)/s
+  // Strategy 3: Yahoo Finance API (no auth required for basic quotes)
+  try {
+    const res = await fetch(
+      "https://query1.finance.yahoo.com/v8/finance/chart/EGP=X?range=1d&interval=1d",
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+        signal: AbortSignal.timeout(10000),
+      }
     );
-
-    if (match) {
-      const rate = toNum(match[1]);
-      if (rate >= 30 && rate <= 80) {
-        return {
-          rate,
-          changePercent: toNum(match[2]),
-          changeAbs: toNum(match[3]),
-        };
+    if (res.ok) {
+      const json = await res.json();
+      const meta = json?.chart?.result?.[0]?.meta;
+      if (meta) {
+        const rate = toNum(meta.regularMarketPrice);
+        const prevClose = toNum(meta.chartPreviousClose) || toNum(meta.previousClose);
+        if (rate >= 30 && rate <= 80 && prevClose > 0) {
+          const changeAbs = Math.round((rate - prevClose) * 10000) / 10000;
+          const changePercent = Math.round((changeAbs / prevClose) * 10000) / 100;
+          return { rate, changePercent, changeAbs };
+        }
       }
     }
   } catch (err) {
-    console.error("Google Finance USD/EGP error:", err);
+    console.warn("[Yahoo Finance] USD/EGP error:", err);
+  }
+
+  return empty;
+}
+
+/** Parse Google Finance HTML for USD/EGP rate and change */
+function parseGoogleFinanceHTML(html: string): {
+  rate: number;
+  changePercent: number;
+  changeAbs: number;
+} {
+  // Pattern 1: Structured data — "data-last-price" attribute
+  const lastPriceMatch = html.match(/data-last-price="(\d+[\.\d]+)"/);
+  // Pattern 2: Change percentage in data attribute
+  const changePctMatch = html.match(/data-percent-change="([+-]?[\d.]+)"/);
+  // Pattern 3: Price in text near "United States Dollar"
+  const textMatch = html.match(
+    /United States Dollar[^]*?(\d{2}\.\d{4,})/
+  );
+  // Pattern 4: Change percentage text like "+0.05%" or "-0.12%"
+  const changeTextMatch = html.match(/([+-][\d.]+%)/);
+
+  // Pattern 5: Previous close data attribute
+  const prevCloseMatch = html.match(/data-previous-close="(\d+[\.\d]+)"/);
+
+  const rate = toNum(lastPriceMatch?.[1]) || toNum(textMatch?.[1]) || 0;
+  let changePercent = toNum(changePctMatch?.[1]);
+  const prevClose = toNum(prevCloseMatch?.[1]);
+
+  // Fallback: compute change from rate vs previous close
+  if (rate > 0 && prevClose > 0 && changePercent === 0) {
+    const changeAbs = Math.round((rate - prevClose) * 10000) / 10000;
+    changePercent = Math.round((changeAbs / prevClose) * 10000) / 100;
+    if (rate >= 30 && rate <= 80) {
+      return { rate, changePercent, changeAbs };
+    }
+  }
+
+  // Pattern 6: Regex from structured content
+  const match = html.match(
+    /United States Dollar\s*\/\s*Egyptian Pound\s+(\d+[\.\d]+).*?([+-][\d.]+)%/
+  );
+  if (match) {
+    const parsedRate = toNum(match[1]);
+    const parsedChangePct = toNum(match[2]);
+    if (parsedRate >= 30 && parsedRate <= 80) {
+      const parsedChangeAbs = Math.round(parsedRate * parsedChangePct / 100 * 10000) / 10000;
+      return { rate: parsedRate, changePercent: parsedChangePct, changeAbs: parsedChangeAbs };
+    }
+  }
+
+  if (rate >= 30 && rate <= 80 && changePercent !== 0) {
+    const changeAbs = Math.round(rate * changePercent / 100 * 10000) / 10000;
+    return { rate, changePercent, changeAbs };
   }
 
   return { rate: 0, changePercent: 0, changeAbs: 0 };
@@ -511,7 +563,8 @@ export async function GET() {
 
     // ── 3. Google Finance (fallback for USD/EGP only) ──
     let googleFinance: { rate: number; changePercent: number; changeAbs: number } | null = null;
-    if (tv.usdEgp === 0) {
+    // Always try Google Finance when TradingView has no change data (common for FX_IDC:USDEGP)
+    if (tv.usdEgp === 0 || (tv.usdEgpChangePercent === 0 && tv.usdEgpChangeAbs === 0)) {
       googleFinance = await fetchUsdEgpFromGoogleFinance();
     }
 
@@ -528,6 +581,13 @@ export async function GET() {
       usdEgpChangeAbs = tv.usdEgpChangeAbs;
       usdEgpSource = "TradingView";
       hasChangeData = true;
+
+      // TradingView USDEGP often returns 0 for change — use Google Finance as fallback
+      if (usdEgpChangePercent === 0 && usdEgpChangeAbs === 0 && googleFinance && googleFinance.changePercent !== 0) {
+        usdEgpChangePercent = googleFinance.changePercent;
+        usdEgpChangeAbs = googleFinance.changeAbs;
+        usdEgpSource = "TradingView + Google Finance";
+      }
     } else if (googleFinance && googleFinance.rate > 0) {
       usdEgpRate = googleFinance.rate;
       usdEgpChangePercent = googleFinance.changePercent;
@@ -588,13 +648,22 @@ export async function GET() {
     let goldPoundEgp = scraped.goldPoundEgp || 0;
     let ounceEgp = scraped.ounceEgp || 0;
 
-    // Track each EGP gold item's change independently from its source
-    const k24Change = trackGoldEgpChange("k24", gold24kEgp);
-    const k21Change = trackGoldEgpChange("k21", gold21kEgp);
-    const k22Change = trackGoldEgpChange("k22", gold22kEgp);
-    const k18Change = trackGoldEgpChange("k18", gold18kEgp);
-    const poundChange = trackGoldEgpChange("pound", goldPoundEgp);
-    const ounceChange = trackGoldEgpChange("ounce", ounceEgp);
+    // ── Compute gold EGP change from gold USD change + USD/EGP change ──
+    // Formula: EGP_price ≈ USD_price × USD/EGP_rate
+    // So: EGP_change% = (1 + goldUSD_change%) × (1 + usdEgp_change%) - 1
+    // This is reliable across serverless cold starts (unlike in-memory tracking).
+    const goldUsdChgPct = goldUsdChangePercent || 0;
+    const usdEgpChgPct = usdEgpChangePercent || 0;
+
+    let goldEgpChangePercent = 0;
+    let goldEgpChangeAbs = 0;
+
+    if (goldUsdChgPct !== 0 || usdEgpChgPct !== 0) {
+      goldEgpChangePercent = Math.round(((1 + goldUsdChgPct / 100) * (1 + usdEgpChgPct / 100) - 1) * 10000) / 100;
+      if (gold24kEgp > 0) {
+        goldEgpChangeAbs = Math.round(gold24kEgp * goldEgpChangePercent / 100 * 100) / 100;
+      }
+    }
 
     const goldKarats: Record<string, {
       price: number;
@@ -604,14 +673,17 @@ export async function GET() {
       changePercent: number;
     }> = {};
 
-    if (gold24kEgp > 0) goldKarats["24"] = { price: gold24kEgp, high: gold24kHigh, low: gold24kLow, change: k24Change.changeAbs, changePercent: k24Change.changePercent };
-    if (gold21kEgp > 0) goldKarats["21"] = { price: gold21kEgp, high: gold21kHigh, low: gold21kLow, change: k21Change.changeAbs, changePercent: k21Change.changePercent };
-    if (gold22kEgp > 0) goldKarats["22"] = { price: gold22kEgp, high: 0, low: 0, change: k22Change.changeAbs, changePercent: k22Change.changePercent };
-    if (gold18kEgp > 0) goldKarats["18"] = { price: gold18kEgp, high: 0, low: 0, change: k18Change.changeAbs, changePercent: k18Change.changePercent };
+    // Apply computed change proportionally to each karat
+    const k24ChangeAbs = gold24kEgp > 0 ? Math.round(gold24kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
+    const k21ChangeAbs = gold21kEgp > 0 ? Math.round(gold21kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
+    const k22ChangeAbs = gold22kEgp > 0 ? Math.round(gold22kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
+    const k18ChangeAbs = gold18kEgp > 0 ? Math.round(gold18kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
+    const poundChangeAbs = goldPoundEgp > 0 ? Math.round(goldPoundEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
 
-    // Use 24K change as the primary EGP gold change indicator
-    const goldEgpChangePercent = k24Change.changePercent;
-    const goldEgpChangeAbs = k24Change.changeAbs;
+    if (gold24kEgp > 0) goldKarats["24"] = { price: gold24kEgp, high: gold24kHigh, low: gold24kLow, change: k24ChangeAbs, changePercent: goldEgpChangePercent };
+    if (gold21kEgp > 0) goldKarats["21"] = { price: gold21kEgp, high: gold21kHigh, low: gold21kLow, change: k21ChangeAbs, changePercent: goldEgpChangePercent };
+    if (gold22kEgp > 0) goldKarats["22"] = { price: gold22kEgp, high: 0, low: 0, change: k22ChangeAbs, changePercent: goldEgpChangePercent };
+    if (gold18kEgp > 0) goldKarats["18"] = { price: gold18kEgp, high: 0, low: 0, change: k18ChangeAbs, changePercent: goldEgpChangePercent };
 
     // ── Market Status ──
     const marketStatus = getMarketStatus();
@@ -644,8 +716,8 @@ export async function GET() {
         karats: goldKarats,
         ounceEgp: ounceEgp || Math.round(goldUsdPerOz * usdEgpRate),
         goldPoundEgp: goldPoundEgp || Math.round(gold21kEgp * 8),
-        poundChangePercent: poundChange.changePercent,
-        poundChangeAbs: poundChange.changeAbs,
+        poundChangePercent: goldEgpChangePercent,
+        poundChangeAbs: poundChangeAbs,
       },
       dataFreshness: {
         tradingView: tv.usdEgp > 0,
