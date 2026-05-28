@@ -2540,46 +2540,28 @@ function PortfolioDashboard() {
                                 const s2 = ta.supports[1] || null;
                                 const s3 = ta.supports[2] || null;
 
-                                const sourceColorMap: Record<string, string> = {
-                                  'SMA': 'bg-blue-500/20 text-blue-400',
-                                  'EMA': 'bg-violet-500/20 text-violet-400',
-                                  'BB': 'bg-orange-500/20 text-orange-400',
-                                  'Classic': 'bg-sky-500/20 text-sky-400',
-                                  'Fibonacci': 'bg-purple-500/20 text-purple-400',
-                                  'Camarilla': 'bg-amber-500/20 text-amber-400',
-                                  'Woodie': 'bg-teal-500/20 text-teal-400',
-                                  '52W': 'bg-rose-500/20 text-rose-400',
-                                };
-
-                                const getSourceTag = (source: string) => {
-                                  const key = Object.keys(sourceColorMap).find(k => source.includes(k)) || '';
-                                  const cls = sourceColorMap[key] || 'bg-muted text-muted-foreground';
-                                  // Abbreviate: 'SMA 50' → 'S50', 'Camarilla R1' → 'Cam.R1', etc.
-                                  let label = source;
-                                  if (source.startsWith('Classic')) label = 'Cl.' + source.slice(7);
-                                  else if (source.startsWith('Fibonacci')) label = 'Fib.' + source.slice(10);
-                                  else if (source.startsWith('Camarilla')) label = 'Cam.' + source.slice(9);
-                                  else if (source.startsWith('Woodie')) label = 'Wd.' + source.slice(6);
-                                  else if (source.startsWith('BB ')) label = source;
-                                  else if (source.startsWith('52W ')) label = source;
-                                  return <span className={`inline-block px-0.5 rounded text-[7px] leading-tight ${cls}`}>{label}</span>;
-                                };
-
                                 const renderSR = (level: typeof r1, type: 'r' | 's', highlight = false) => {
                                   if (!level || level.price <= 0) return <span className="text-muted-foreground/60">—</span>;
                                   const pct = price > 0 ? ((level.price - price) / price * 100).toFixed(1) : '0';
-                                  const sources = level.source.split(', ').slice(0, 3);
+                                  const pctNum = parseFloat(pct);
+                                  const pctColor = type === 'r'
+                                    ? pctNum < 2 ? 'text-yellow-500/80' : pctNum < 5 ? 'text-orange-400/80' : 'text-red-400/80'
+                                    : pctNum < 2 ? 'text-yellow-500/80' : pctNum < 5 ? 'text-orange-400/80' : 'text-red-400/80';
+                                  const strengthFill = Array.from({ length: 5 }, (_, i) => i < level.strength);
+                                  const tip = level.source + ` · Confluence ${level.strength}/5`;
                                   return (
-                                    <div className="flex flex-col items-end gap-0.5" title={`${level.source} (str: ${level.strength}/5)`}>
-                                      <span className={`font-mono text-xs ${highlight ? 'font-semibold' : ''}`}>
+                                    <div className="flex flex-col items-end" title={tip}>
+                                      <span className={`font-mono text-xs leading-tight ${highlight ? 'font-bold' : ''}`}>
                                         {fmtCurrency(level.price)}
                                       </span>
-                                      <div className="flex items-center gap-1">
-                                        <span className="text-[8px] text-muted-foreground">
+                                      <div className="flex items-center gap-1 mt-px">
+                                        <span className={`text-[9px] tabular-nums ${pctColor}`}>
                                           {type === 'r' ? '+' : ''}{pct}%
                                         </span>
-                                        <span className="flex items-center gap-px">
-                                          {sources.map((s, i) => <span key={i}>{getSourceTag(s)}</span>)}
+                                        <span className="flex gap-px" title={`Strength: ${level.strength}/5`}>
+                                          {strengthFill.map((f, i) => (
+                                            <span key={i} className={`w-1 h-1.5 rounded-full ${f ? 'bg-amber-400' : 'bg-muted-foreground/20'}`} />
+                                          ))}
                                         </span>
                                       </div>
                                     </div>
@@ -2767,24 +2749,27 @@ function PortfolioDashboard() {
                                   if (!ta) return null;
                                   const price = ta.currentPrice;
 
-                                  const renderPivotRow = (pivots: PivotSet, type: 'classic' | 'fibonacci' | 'camarilla' | 'woodie') => {
+                                  const renderPivotRow = (pivots: PivotSet) => {
                                     const vals = [pivots.r3, pivots.r2, pivots.r1, pivots.pp, pivots.s1, pivots.s2, pivots.s3];
                                     const labels = ['R3', 'R2', 'R1', 'PP', 'S1', 'S2', 'S3'];
                                     return (
-                                      <div className="flex items-center justify-center gap-1 font-mono text-[9px]">
+                                      <div className="flex items-center justify-center gap-0.5 font-mono text-[9px]">
                                         {vals.map((v, i) => {
-                                          if (v <= 0) return <span key={i} className="text-muted-foreground/40 w-10 text-center">—</span>;
+                                          if (v <= 0) return <span key={i} className="text-muted-foreground/30 w-[46px] text-center">—</span>;
                                           const isResistance = i < 3;
                                           const isPP = i === 3;
                                           const isNear = i === 2 || i === 4;
+                                          const isBetween = isResistance ? v > price : v < price;
                                           const color = isPP
-                                            ? 'text-blue-600 dark:text-blue-400 font-semibold'
+                                            ? 'text-blue-600 dark:text-blue-400 font-bold'
                                             : isResistance
-                                              ? isNear ? 'text-red-600 dark:text-red-400 font-medium' : 'text-red-400/70'
-                                              : isNear ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-emerald-400/70';
+                                              ? isNear ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-red-400/60'
+                                              : isNear ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-emerald-400/60';
                                           return (
-                                            <div key={i} className="w-10 text-center" title={`${labels[i]}: ${v}`}>
-                                              <span className={color}>{v.toFixed(1)}</span>
+                                            <div key={i} className="w-[46px] text-center py-0.5" title={`${labels[i]}: ${v}`}>
+                                              <span className={`${color} ${isBetween ? 'opacity-100' : 'opacity-50'}`}>
+                                                {v.toFixed(1)}
+                                              </span>
                                             </div>
                                           );
                                         })}
@@ -2796,16 +2781,16 @@ function PortfolioDashboard() {
                                     <TableRow key={`pivot-${stock.symbol}`} className="hover:bg-muted/30">
                                       <TableCell className="pl-4 font-semibold text-[11px]">{stock.symbol}</TableCell>
                                       <TableCell className="border-l border-r border-muted p-1">
-                                        {renderPivotRow(ta.pivotsClassic, 'classic')}
+                                        {renderPivotRow(ta.pivotsClassic)}
                                       </TableCell>
                                       <TableCell className="border-r border-muted p-1">
-                                        {renderPivotRow(ta.pivotsFibonacci, 'fibonacci')}
+                                        {renderPivotRow(ta.pivotsFibonacci)}
                                       </TableCell>
                                       <TableCell className="border-r border-muted p-1">
-                                        {renderPivotRow(ta.pivotsCamarilla, 'camarilla')}
+                                        {renderPivotRow(ta.pivotsCamarilla)}
                                       </TableCell>
                                       <TableCell className="border-r border-muted p-1">
-                                        {renderPivotRow(ta.pivotsWoodie, 'woodie')}
+                                        {renderPivotRow(ta.pivotsWoodie)}
                                       </TableCell>
                                     </TableRow>
                                   );
