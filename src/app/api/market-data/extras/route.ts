@@ -648,22 +648,12 @@ export async function GET() {
     let goldPoundEgp = scraped.goldPoundEgp || 0;
     let ounceEgp = scraped.ounceEgp || 0;
 
-    // ── Compute gold EGP change from gold USD change + USD/EGP change ──
-    // Formula: EGP_price ≈ USD_price × USD/EGP_rate
-    // So: EGP_change% = (1 + goldUSD_change%) × (1 + usdEgp_change%) - 1
-    // This is reliable across serverless cold starts (unlike in-memory tracking).
-    const goldUsdChgPct = goldUsdChangePercent || 0;
-    const usdEgpChgPct = usdEgpChangePercent || 0;
-
-    let goldEgpChangePercent = 0;
-    let goldEgpChangeAbs = 0;
-
-    if (goldUsdChgPct !== 0 || usdEgpChgPct !== 0) {
-      goldEgpChangePercent = Math.round(((1 + goldUsdChgPct / 100) * (1 + usdEgpChgPct / 100) - 1) * 10000) / 100;
-      if (gold24kEgp > 0) {
-        goldEgpChangeAbs = Math.round(gold24kEgp * goldEgpChangePercent / 100 * 100) / 100;
-      }
-    }
+    // ── Gold EGP change: computed CLIENT-SIDE from Egyptian prices only ──
+    // The server returns raw prices from gold-price-live.com.
+    // The client (browser) tracks the first price of each day in localStorage
+    // and computes the daily change — 100% based on Egyptian gold market prices.
+    // This avoids mixing international gold change with USD/EGP change,
+    // and works reliably across serverless cold starts.
 
     const goldKarats: Record<string, {
       price: number;
@@ -673,17 +663,11 @@ export async function GET() {
       changePercent: number;
     }> = {};
 
-    // Apply computed change proportionally to each karat
-    const k24ChangeAbs = gold24kEgp > 0 ? Math.round(gold24kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
-    const k21ChangeAbs = gold21kEgp > 0 ? Math.round(gold21kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
-    const k22ChangeAbs = gold22kEgp > 0 ? Math.round(gold22kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
-    const k18ChangeAbs = gold18kEgp > 0 ? Math.round(gold18kEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
-    const poundChangeAbs = goldPoundEgp > 0 ? Math.round(goldPoundEgp * goldEgpChangePercent / 100 * 100) / 100 : 0;
-
-    if (gold24kEgp > 0) goldKarats["24"] = { price: gold24kEgp, high: gold24kHigh, low: gold24kLow, change: k24ChangeAbs, changePercent: goldEgpChangePercent };
-    if (gold21kEgp > 0) goldKarats["21"] = { price: gold21kEgp, high: gold21kHigh, low: gold21kLow, change: k21ChangeAbs, changePercent: goldEgpChangePercent };
-    if (gold22kEgp > 0) goldKarats["22"] = { price: gold22kEgp, high: 0, low: 0, change: k22ChangeAbs, changePercent: goldEgpChangePercent };
-    if (gold18kEgp > 0) goldKarats["18"] = { price: gold18kEgp, high: 0, low: 0, change: k18ChangeAbs, changePercent: goldEgpChangePercent };
+    // Raw prices — change is computed client-side from localStorage
+    if (gold24kEgp > 0) goldKarats["24"] = { price: gold24kEgp, high: gold24kHigh, low: gold24kLow, change: 0, changePercent: 0 };
+    if (gold21kEgp > 0) goldKarats["21"] = { price: gold21kEgp, high: gold21kHigh, low: gold21kLow, change: 0, changePercent: 0 };
+    if (gold22kEgp > 0) goldKarats["22"] = { price: gold22kEgp, high: 0, low: 0, change: 0, changePercent: 0 };
+    if (gold18kEgp > 0) goldKarats["18"] = { price: gold18kEgp, high: 0, low: 0, change: 0, changePercent: 0 };
 
     // ── Market Status ──
     const marketStatus = getMarketStatus();
@@ -710,14 +694,16 @@ export async function GET() {
         perGram21kLow: gold21kLow,
         perGram24kUsd: Math.round(goldUsdPerGram * 100) / 100,
         perGram21kUsd: Math.round((goldUsdPerGram * (21 / 24)) * 100) / 100,
-        changePercent: goldEgpChangePercent,
-        changeAbs: goldEgpChangeAbs,
+        // Gold EGP change is computed CLIENT-SIDE from Egyptian prices
+        changePercent: 0,
+        changeAbs: 0,
         egpSource: scraped.source || "",
         karats: goldKarats,
         ounceEgp: ounceEgp || Math.round(goldUsdPerOz * usdEgpRate),
         goldPoundEgp: goldPoundEgp || Math.round(gold21kEgp * 8),
-        poundChangePercent: goldEgpChangePercent,
-        poundChangeAbs: poundChangeAbs,
+        // Gold pound EGP change is computed CLIENT-SIDE
+        poundChangePercent: 0,
+        poundChangeAbs: 0,
       },
       dataFreshness: {
         tradingView: tv.usdEgp > 0,
