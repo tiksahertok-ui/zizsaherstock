@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 /**
  * POST /api/auth/lookup-username
@@ -12,6 +12,10 @@ import { supabase } from '@/lib/supabase';
  */
 export async function POST(request: NextRequest) {
   try {
+    if (!isSupabaseConfigured || !supabase) {
+      return NextResponse.json({ error: 'Auth service not configured' }, { status: 503 });
+    }
+
     const { username } = await request.json();
 
     if (!username || typeof username !== 'string') {
