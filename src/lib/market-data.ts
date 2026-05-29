@@ -133,6 +133,8 @@ const TECH_COLUMNS = [
 // Per-symbol cache: symbol → { quoteData, ts }
 const liveCache = new Map<string, { data: QuoteData; ts: number }>();
 const LIVE_CACHE_TTL = 5_000; // 5 seconds
+const GOLD_CACHE_TTL = 1_500; // 1.5 seconds for gold (fast-moving commodity)
+const GOLD_SYMBOLS = new Set(['XAUUSD']);
 
 // ── In-flight deduplication ───────────────────────────────────
 // Prevents duplicate TradingView requests when multiple callers
@@ -260,13 +262,14 @@ export async function fetchQuotesLive(
   const normalizedSymbols = symbols.map((s) => s.toUpperCase().trim());
   const uniqueSymbols = [...new Set(normalizedSymbols)];
 
-  // Check cache for each symbol
+  // Check cache for each symbol (gold gets shorter TTL)
   const cachedResult: Record<string, QuoteData> = {};
   const missingSymbols: string[] = [];
 
   for (const s of uniqueSymbols) {
     const cached = liveCache.get(s);
-    if (cached && now - cached.ts < LIVE_CACHE_TTL) {
+    const ttl = GOLD_SYMBOLS.has(s) ? GOLD_CACHE_TTL : LIVE_CACHE_TTL;
+    if (cached && now - cached.ts < ttl) {
       cachedResult[s] = cached.data;
     } else {
       missingSymbols.push(s);
