@@ -10,13 +10,14 @@ import {
   Tooltip as RechartsTooltip, XAxis, YAxis, ReferenceLine,
 } from 'recharts';
 import {
-  LineChart, PieChart as PieChartIcon, BarChart3, TrendingUp, Shield, Gem,
+  LineChart, PieChart as PieChartIcon, BarChart3, TrendingUp, Gem,
 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 import { fmtCurrency, fmtNumber, fmtPercent, pnlColor } from '@/utils/formatters';
+import { aggregateBySector } from '@/utils/stock-data';
 import type { StoredHolding, StockPerformance, IndexData } from '@/types';
 
 // ── Color palettes ────────────────────────────────────────────
@@ -183,19 +184,8 @@ function AllocationCharts({ holdings }: { holdings: StoredHolding[] }) {
     );
   }
 
-  // Sector aggregation
-  const sectorMap = new Map<string, { value: number; percent: number }>();
-  const stockInfoMap = new Map<string, string>(); // symbol -> sector
-  for (const h of holdings) {
-    const sector = 'Other'; // simplified; in production this uses availableStocks
-    const existing = sectorMap.get(sector) || { value: 0, percent: 0 };
-    existing.value += h.marketValue;
-    sectorMap.set(sector, existing);
-    stockInfoMap.set(h.symbol, sector);
-  }
-  const sectors = Array.from(sectorMap.entries())
-    .map(([sector, data]) => ({ sector, ...data, percent: (data.value / total) * 100 }))
-    .sort((a, b) => b.value - a.value);
+  // Sector aggregation using EGX_STOCKS sector data
+  const sectors = aggregateBySector(holdings);
 
   // Stock allocation data
   const stockAllocation = [...holdings]
@@ -631,7 +621,7 @@ export function PortfolioCharts({ holdings, perfData, indexData }: PortfolioChar
 
   return (
     <Tabs defaultValue="performance" className="space-y-4">
-      <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5 max-w-2xl">
+      <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 max-w-2xl">
         <TabsTrigger value="performance" className="gap-1.5 text-xs sm:text-sm">
           <LineChart className="h-3.5 w-3.5" />
           Performance
@@ -648,10 +638,7 @@ export function PortfolioCharts({ holdings, perfData, indexData }: PortfolioChar
           <TrendingUp className="h-3.5 w-3.5" />
           Benchmark
         </TabsTrigger>
-        <TabsTrigger value="sr" className="gap-1.5 text-xs sm:text-sm">
-          <Shield className="h-3.5 w-3.5" />
-          S&R
-        </TabsTrigger>
+
       </TabsList>
 
       {/* Performance */}
@@ -720,20 +707,7 @@ export function PortfolioCharts({ holdings, perfData, indexData }: PortfolioChar
         </Card>
       </TabsContent>
 
-      {/* S&R — placeholder, handled by separate TechnicalAnalysisPanel */}
-      <TabsContent value="sr">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Support & Resistance</CardTitle>
-            <CardDescription>Scroll down for the full S&R analysis panel</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="h-32 flex items-center justify-center text-sm text-muted-foreground">
-              Technical analysis panel is available below
-            </div>
-          </CardContent>
-        </Card>
-      </TabsContent>
+
     </Tabs>
   );
 }
