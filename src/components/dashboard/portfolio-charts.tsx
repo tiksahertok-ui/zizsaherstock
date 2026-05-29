@@ -446,14 +446,16 @@ function BenchmarkChart({ holdings, perfData }: {
     return result;
   }, [holdings, perfData]);
 
-  // Chart data: one point per period
+  // Chart data: one point per period (null = missing data → Recharts breaks line)
   const benchmarkChartData = useMemo(() => {
     if (Object.keys(perfData).length === 0) return [];
     return BENCHMARK_PERIODS.map(period => {
-      const point: Record<string, string | number> = { period };
-      point['portfolio'] = Math.round((portfolioReturns[period] || 0) * 100) / 100;
+      const point: Record<string, string | number | null> = { period };
+      const pRet = portfolioReturns[period];
+      point['portfolio'] = pRet != null ? Math.round(pRet * 100) / 100 : null;
       for (const sym of ['EGX30', 'EGX70_EWI', 'EGX100_EWI', 'XAUUSD']) {
-        point[sym] = perfData[sym]?.returns[period as keyof typeof perfData[sym]['returns']] ?? 0;
+        const val = perfData[sym]?.returns[period as keyof typeof perfData[sym]['returns']];
+        point[sym] = val != null ? val : null;
       }
       return point;
     });
@@ -572,7 +574,7 @@ function BenchmarkChart({ holdings, perfData }: {
               })()}
 
               {/* Separator */}
-              <tr className="border-b"><td colSpan={7} className="px-3 py-1 bg-muted/30" /></tr>
+              <tr className="border-b"><td colSpan={BENCHMARK_PERIODS.length + 1} className="px-3 py-1 bg-muted/30" /></tr>
 
               {/* Indices + Gold */}
               {['EGX30', 'EGX70_EWI', 'EGX100_EWI', 'XAUUSD'].map((sym) => {
