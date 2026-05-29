@@ -30,7 +30,15 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
     {
       label: 'Market Value',
       value: fmtCurrency(summary.totalMarketValue),
-      sub: fmtPercent(summary.totalPnLPercent) + ' total P&L',
+      sub: (
+        <>
+          {fmtPercent(summary.totalPnLPercent)}
+          <span className="mx-0.5">·</span>
+          <span className={pnlColor(summary.totalPnL)}>
+            {summary.totalPnL >= 0 ? '+' : ''}{fmtCurrency(summary.totalPnL)}
+          </span>
+        </>
+      ),
       subColor: pnlColor(summary.totalPnL),
       icon: TrendingUp,
       iconBg: 'bg-violet-100 dark:bg-violet-900/40',
@@ -41,7 +49,15 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
       value: fmtCurrency(Math.abs(summary.todaysChange)),
       valuePrefix: summary.todaysChange >= 0 ? '+' : '-',
       valueColor: pnlColor(summary.todaysChange),
-      sub: fmtPercent(summary.todaysChangePercent),
+      sub: (
+        <>
+          {fmtPercent(summary.todaysChangePercent)}
+          <span className="mx-0.5">·</span>
+          <span className={pnlColor(summary.todaysChange)}>
+            {summary.todaysChange >= 0 ? '+' : ''}{fmtCurrency(summary.todaysChange)}
+          </span>
+        </>
+      ),
       subColor: pnlColor(summary.todaysChange),
       icon: CalendarCheck,
       iconBg: summary.todaysChange >= 0
@@ -58,7 +74,15 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
       value: summary.bestPerformer?.symbol ?? '—',
       valueSize: 'text-lg',
       sub: summary.bestPerformer
-        ? `${summary.bestPerformer.name} · ${fmtPercent(summary.bestPerformer.pnlPercent)}`
+        ? (
+          <>
+            {fmtPercent(summary.bestPerformer.pnlPercent)}
+            <span className="mx-0.5">·</span>
+            <span className={pnlColor(summary.bestPerformer.pnlPercent)}>
+              {summary.bestPerformer.pnl >= 0 ? '+' : ''}{fmtCurrency(summary.bestPerformer.pnl)}
+            </span>
+          </>
+        )
         : 'No holdings yet',
       subColor: summary.bestPerformer ? pnlColor(summary.bestPerformer.pnlPercent) : 'text-muted-foreground',
       icon: Trophy,
