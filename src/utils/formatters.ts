@@ -12,11 +12,12 @@ export function fmtCurrency(value: number): string {
   }).format(value);
 }
 
-/** Format a number with 2 decimal places */
-export function fmtNumber(value: number): string {
+/** Format a number with configurable decimal places (default 2) */
+export function fmtNumber(value: number, decimals?: number): string {
+  const d = decimals ?? 2;
   return new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: d,
+    maximumFractionDigits: d,
   }).format(value);
 }
 
