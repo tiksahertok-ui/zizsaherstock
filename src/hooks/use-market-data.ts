@@ -105,6 +105,65 @@ export function useMarketData(
     return () => window.clearTimeout(timer);
   }, [fetchAll, hydrated, profile]);
 
+  // ── Gold poll (every 2s — gold moves fast) ──
+  const fetchGoldLiveData = useCallback(async () => {
+    try {
+      const goldRes = await fetch('/api/market-data/live?symbols=XAUUSD,USDEGP', { cache: 'no-store' });
+      if (!goldRes.ok) return;
+      const data = await goldRes.json();
+
+      if (data.gold || data.usdEgp) {
+        setExtrasData(prev => {
+          if (!prev) {
+            return {
+              usdEgp: {
+                rate: data.usdEgp?.rate || 0,
+                changePercent: data.usdEgp?.changePercent || 0,
+                changeAbs: data.usdEgp?.changeAbs || 0,
+                source: 'TradingView',
+                hasChangeData: true,
+              },
+              gold: {
+                usdPrice: data.gold?.usdPrice || 0,
+                usdChangePercent: data.gold?.changePercent || 0,
+                usdChangeAbs: data.gold?.changeAbs || 0,
+                perGram24kEgp: 0, perGram21kEgp: 0,
+                perGram24kHigh: 0, perGram24kLow: 0,
+                perGram21kHigh: 0, perGram21kLow: 0,
+                perGram24kUsd: 0, perGram21kUsd: 0,
+                changePercent: 0, changeAbs: 0,
+                egpSource: '', karats: {},
+              },
+              marketStatus: data.marketStatus || undefined,
+            };
+          }
+          return {
+            ...prev,
+            gold: {
+              ...prev.gold,
+              usdPrice: data.gold?.usdPrice || prev.gold.usdPrice,
+              usdChangePercent: data.gold?.changePercent ?? prev.gold.usdChangePercent,
+              usdChangeAbs: data.gold?.changeAbs ?? prev.gold.usdChangeAbs,
+            },
+            usdEgp: {
+              ...prev.usdEgp,
+              rate: data.usdEgp?.rate || prev.usdEgp.rate,
+              ...(data.usdEgp && data.usdEgp.changePercent !== 0 ? {
+                changePercent: data.usdEgp.changePercent,
+                changeAbs: data.usdEgp.changeAbs,
+              } : {}),
+              source: prev.usdEgp.source || 'TradingView',
+              hasChangeData: true,
+            },
+            ...(data.marketStatus ? { marketStatus: data.marketStatus } : {}),
+          };
+        });
+      }
+    } catch {
+      // Silent fail for background polling
+    }
+  }, []);
+
   // ── LIVE data polling (every 5s) ──
   // Fetches holdings with fresh prices + indices + gold + USD/EGP
   const fetchLiveData = useCallback(async () => {
@@ -255,16 +314,18 @@ export function useMarketData(
   useEffect(() => {
     if (!hydrated || !profile) return;
     const firstComp = window.setTimeout(() => void fetchComprehensive(), 0);
-    const firstLive = window.setTimeout(() => void fetchLiveData(), 0);
+    const firstLive = window.setTimeout(() => { void fetchLiveData(); void fetchGoldLiveData(); }, 0);
     const liveInterval = setInterval(fetchLiveData, 5_000);
+    const goldInterval = setInterval(fetchGoldLiveData, 2_000);
     const compInterval = setInterval(fetchComprehensive, 60_000);
     return () => {
       clearTimeout(firstComp);
       clearTimeout(firstLive);
       clearInterval(liveInterval);
+      clearInterval(goldInterval);
       clearInterval(compInterval);
     };
-  }, [fetchLiveData, fetchComprehensive, hydrated, profile]);
+  }, [fetchLiveData, fetchGoldLiveData, fetchComprehensive, hydrated, profile]);
 
   // ── Client-side gold EGP + USD/EGP change tracking ──
   useEffect(() => {
