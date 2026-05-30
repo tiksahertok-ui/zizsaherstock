@@ -155,7 +155,7 @@ export async function GET(request: NextRequest) {
     };
 
     // Market breadth data if requested
-    let marketBreadth = null;
+    let breadthData: Record<string, { sector: string; count: number; avgChange: number; avgChangePct: number; undervalued: number; overvalued: number; totalMcap: number }> | null = null;
     if (marketBreadth) {
       const sectorMap = new Map<string, { count: number; avgChange: number; undervalued: number; overvalued: number; totalMcap: number }>();
       for (const r of results) {
@@ -170,9 +170,9 @@ export async function GET(request: NextRequest) {
         if (r.status === 'Overvalued') entry.overvalued++;
         entry.totalMcap += (r as unknown as { marketCap: number }).marketCap;
       }
-      marketBreadth = {};
+      breadthData = {};
       for (const [sec, data] of sectorMap) {
-        (marketBreadth as Record<string, typeof data & { sector: string; avgChangePct: number }>)[sec] = {
+        breadthData[sec] = {
           sector: sec,
           count: data.count,
           avgChange: data.avgChange,
@@ -184,7 +184,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results: limited, summary, marketBreadth }, {
+    return NextResponse.json({ results: limited, summary, marketBreadth: breadthData }, {
       headers: { "Cache-Control": "public, max-age=120, stale-while-revalidate=30" },
     });
   } catch (error) {
