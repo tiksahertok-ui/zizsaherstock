@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Star, Trash2, Plus, Loader2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Star, Trash2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -88,6 +88,7 @@ export default function WatchlistPanel({ symbols }: WatchlistPanelProps) {
           symbol: string;
           name: string;
           currentPrice: number;
+          change: number;
           weightedUpside: number;
           weightedFairValue: number;
           status: string;
@@ -96,7 +97,7 @@ export default function WatchlistPanel({ symbols }: WatchlistPanelProps) {
         setStocks(filtered.map(r => ({
           symbol: r.symbol,
           price: r.currentPrice,
-          change: 0, // Will be populated from the summary data
+          change: r.change || 0,
           fairValue: r.weightedFairValue,
           upside: r.weightedUpside,
           status: r.status,

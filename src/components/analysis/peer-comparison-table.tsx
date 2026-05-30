@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, Loader2, RefreshCw } from 'lucide-react';
+import { Users, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -34,11 +34,6 @@ function formatMcap(mcap: number): string {
   if (mcap >= 1e9) return `${(mcap / 1e9).toFixed(1)}B`;
   if (mcap >= 1e6) return `${(mcap / 1e6).toFixed(0)}M`;
   return fmtNumber(mcap, 0);
-}
-
-function bestInColumn(values: number[]): Set<number> {
-  // Best = lowest PE/PB/EV_EBITDA, highest ROE/Margin/Growth/Yield
-  return new Set<number>();
 }
 
 function TableSkeleton() {

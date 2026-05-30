@@ -194,59 +194,68 @@ export async function fetchFundamentals(
       };
       if (!json.data) return {};
 
+      // Build column-index map for dynamic field extraction
+      const colIdx: Record<string, number> = {};
+      FUNDAMENTAL_COLUMNS.forEach((col, i) => { colIdx[col] = i; });
+
       const batchResult: Record<string, FundamentalData> = {};
       for (const item of json.data) {
         const sym = fromTvTicker(item.s || "");
         const d = item.d || [];
 
-        const pe = toNum(d[8]);
-        const revenue = toNum(d[20]);
-        const netIncome = toNum(d[21]);
-        const grossProfit = toNum(d[23]);
-        const grossMargin = toNum(d[24]);
-        const operatingMargin = toNum(d[25]);
-        const netMargin = toNum(d[26]);
-        const roe = toNum(d[27]);
-        const roa = toNum(d[28]);
-        const freeCashFlow = toNum(d[40]);
-        const operatingCashFlow = toNum(d[42]);
-        const totalAssets = toNum(d[35]);
-        const totalLiabilities = toNum(d[36]);
-        const stockholdersEquity = toNum(d[37]);
+        // Dynamic getter helpers based on column names
+        const get = (col: string) => toNum(d[colIdx[col]]);
+        const getStr = (col: string, fallback: string) =>
+          d[colIdx[col]] != null ? String(d[colIdx[col]]) : fallback;
+
+        const pe = get("price_earnings_ttm");
+        const revenue = get("revenue");
+        const netIncome = get("net_income");
+        const grossProfit = get("gross_profit");
+        const grossMargin = get("gross_margin");
+        const operatingMargin = get("operating_margin");
+        const netMargin = get("net_margin");
+        const roe = get("return_on_equity");
+        const roa = get("return_on_assets");
+        const freeCashFlow = get("free_cash_flow");
+        const operatingCashFlow = get("operating_cash_flow");
+        const totalAssets = get("total_assets");
+        const totalLiabilities = get("total_liabilities");
+        const stockholdersEquity = get("stockholders_equity");
 
         batchResult[sym] = {
           symbol: sym,
-          name: (d[5] as string) || sym,
+          name: getStr("name", sym),
 
           // Price
-          price: toNum(d[0]),
-          change: toNum(d[1]),
-          changeAbs: toNum(d[2]),
-          volume: toNum(d[3]),
-          marketCap: toNum(d[6]),
-          currency: (d[7] as string) || "EGP",
-          week52High: toNum(d[46]),
-          week52Low: toNum(d[47]),
-          beta: toNum(d[45]),
+          price: get("close"),
+          change: get("change"),
+          changeAbs: get("change_abs"),
+          volume: get("volume"),
+          marketCap: get("market_cap_basic"),
+          currency: getStr("currency", "EGP"),
+          week52High: get("price_52_week_high"),
+          week52Low: get("price_52_week_low"),
+          beta: get("beta_1_year"),
 
           // Valuation
           pe,
-          pb: toNum(d[9]),
-          evEbitda: toNum(d[10]),
-          ps: toNum(d[11]),
-          peg: toNum(d[12]),
+          pb: get("price_book_fq"),
+          evEbitda: get("ev_ebitda"),
+          ps: get("price_sales_ttm"),
+          peg: get("peg_trailing_12m"),
 
           // Per-Share
-          eps: toNum(d[13]),
-          bvps: toNum(d[14]),
-          dps: toNum(d[15]),
-          revenuePerShare: toNum(d[16]),
-          sharesOutstanding: toNum(d[44]),
+          eps: get("earnings_per_share_basic_ttm"),
+          bvps: get("book_value_per_share_fq"),
+          dps: get("dividends_per_share_fy"),
+          revenuePerShare: get("revenue_per_share_ttm"),
+          sharesOutstanding: get("total_shares_outstanding_fq"),
 
           // Profitability
           revenue,
           netIncome,
-          operatingIncome: toNum(d[22]),
+          operatingIncome: get("operating_income"),
           grossProfit,
           grossMargin,
           operatingMargin,
@@ -255,33 +264,33 @@ export async function fetchFundamentals(
           roa,
 
           // Growth
-          revenueGrowth: toNum(d[29]),
-          earningsGrowth: toNum(d[30]),
+          revenueGrowth: get("revenue_growth_yoy"),
+          earningsGrowth: get("earnings_growth_yoy"),
 
           // Balance Sheet
-          debtEquity: toNum(d[31]),
-          totalDebt: toNum(d[32]),
-          cash: toNum(d[33]),
+          debtEquity: get("total_debt_equity"),
+          totalDebt: get("total_debt"),
+          cash: get("cash"),
           totalAssets,
           totalLiabilities,
           stockholdersEquity,
-          workingCapital: toNum(d[38]),
+          workingCapital: get("working_capital"),
 
           // Cash Flow
           freeCashFlow,
-          capex: toNum(d[41]),
+          capex: get("capital_expenditure"),
           operatingCashFlow,
 
           // Dividends
-          dividendYield: toNum(d[43]) * 100, // TV returns as decimal
-          payoutRatio: toNum(d[48]) * 100,
+          dividendYield: get("dividend_yield_recent") * 100, // TV returns as decimal
+          payoutRatio: get("payout_ratio") * 100,
 
           // Data quality flags
           hasData: pe > 0 || revenue > 0,
           hasProfitability: revenue > 0 && grossMargin > 0,
           hasBalanceSheet: totalAssets > 0,
           hasCashFlow: freeCashFlow !== 0 || operatingCashFlow !== 0,
-          hasGrowth: toNum(d[29]) !== 0 || toNum(d[30]) !== 0,
+          hasGrowth: get("revenue_growth_yoy") !== 0 || get("earnings_growth_yoy") !== 0,
         };
       }
       return batchResult;

@@ -9,7 +9,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
-import { fmtCurrency, fmtPercent, pnlColor, fmtNumber } from '@/utils/formatters';
+import { fmtCurrency, fmtPercent, pnlColor } from '@/utils/formatters';
 import type { FairValueResult, DCFResult, RelativeResult, DDMResult, AssetResult } from '@/lib/fair-value-engine';
 
 // ── Types ──────────────────────────────────────────────────────

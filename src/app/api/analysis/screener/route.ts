@@ -56,12 +56,21 @@ export async function GET(request: NextRequest) {
     }
     const sectorBenchmarks = computeSectorAverages(enrichedFundData as Parameters<typeof computeSectorAverages>[0]);
 
-    // Calculate fair value for each stock
+    // Calculate fair value for each stock (include fundamental fields needed for filters)
     const results = stocks
       .filter(s => fundData[s.symbol]?.hasData)
       .map(s => {
         const f = fundData[s.symbol];
-        return { ...calculateFairValue(f, s.sector, sectorBenchmarks), marketCap: f.marketCap, pe: f.pe };
+        return {
+          ...calculateFairValue(f, s.sector, sectorBenchmarks),
+          marketCap: f.marketCap,
+          pe: f.pe,
+          roe: f.roe,
+          debtEquity: f.debtEquity,
+          dividendYield: f.dividendYield,
+          revenueGrowth: f.revenueGrowth,
+          change: f.change,
+        };
       });
 
     // Apply filters
@@ -81,17 +90,17 @@ export async function GET(request: NextRequest) {
     }
     // Market cap filters
     if (minMarketCap > 0) {
-      filtered = filtered.filter(r => (r as unknown as { marketCap: number }).marketCap >= minMarketCap);
+      filtered = filtered.filter(r => r.marketCap >= minMarketCap);
     }
     if (maxMarketCap > 0) {
-      filtered = filtered.filter(r => (r as unknown as { marketCap: number }).marketCap <= maxMarketCap);
+      filtered = filtered.filter(r => r.marketCap <= maxMarketCap);
     }
     // PE filters
     if (minPE > 0) {
-      filtered = filtered.filter(r => (r as unknown as { pe: number }).pe >= minPE);
+      filtered = filtered.filter(r => r.pe >= minPE);
     }
     if (maxPE > 0) {
-      filtered = filtered.filter(r => (r as unknown as { pe: number }).pe <= maxPE);
+      filtered = filtered.filter(r => r.pe <= maxPE);
     }
     // Upside filters
     if (minUpside > 0) {
@@ -100,18 +109,30 @@ export async function GET(request: NextRequest) {
     if (maxUpside > 0) {
       filtered = filtered.filter(r => r.weightedUpside <= maxUpside);
     }
+    // ROE filter
+    if (minROE > 0) {
+      filtered = filtered.filter(r => r.roe >= minROE);
+    }
+    // Debt/Equity filter
+    if (maxDebtEquity > 0) {
+      filtered = filtered.filter(r => r.debtEquity <= maxDebtEquity);
+    }
+    // Dividend Yield filter
+    if (minDividendYield > 0) {
+      filtered = filtered.filter(r => r.dividendYield >= minDividendYield);
+    }
+    // Revenue Growth filter
+    if (minRevenueGrowth > 0) {
+      filtered = filtered.filter(r => r.revenueGrowth >= minRevenueGrowth);
+    }
 
     // Sort
-    const sortDir = sort === 'pe' || sort === 'marketcap' ? 1 : -1; // asc for PE/mcap
     switch (sort) {
       case 'upside':
         filtered.sort((a, b) => b.weightedUpside - a.weightedUpside);
         break;
       case 'top_gainers':
-        filtered.sort((a, b) => b.currentPrice * (1 + b.weightedUpside / 100) - a.currentPrice * (1 + a.weightedUpside / 100));
-        // Use actual change% from fundamental data if available
         filtered.sort((a, b) => {
-          // Get actual change from fundData
           const aChange = fundData[a.symbol]?.change || 0;
           const bChange = fundData[b.symbol]?.change || 0;
           return bChange - aChange;
@@ -128,10 +149,10 @@ export async function GET(request: NextRequest) {
         filtered.sort((a, b) => b.dataQuality - a.dataQuality);
         break;
       case 'marketcap':
-        filtered.sort((a, b) => (b as unknown as { marketCap: number }).marketCap - (a as unknown as { marketCap: number }).marketCap);
+        filtered.sort((a, b) => b.marketCap - a.marketCap);
         break;
       case 'pe':
-        filtered.sort((a, b) => (a as unknown as { pe: number }).pe - (b as unknown as { pe: number }).pe);
+        filtered.sort((a, b) => a.pe - b.pe);
         break;
       case 'confidence':
         filtered.sort((a, b) => {
@@ -168,7 +189,7 @@ export async function GET(request: NextRequest) {
         entry.avgChange += fundData[r.symbol]?.change || 0;
         if (r.status === 'Undervalued') entry.undervalued++;
         if (r.status === 'Overvalued') entry.overvalued++;
-        entry.totalMcap += (r as unknown as { marketCap: number }).marketCap;
+        entry.totalMcap += r.marketCap;
       }
       breadthData = {};
       for (const [sec, data] of sectorMap) {
