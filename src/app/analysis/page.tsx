@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   BarChart3, TrendingUp, TrendingDown, LayoutDashboard, Search,
-  Star, Map, Target, Activity, Sparkles,
+  Star, Map, Target, Activity, Sparkles, RefreshCw,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 import StockScreener from '@/components/analysis/stock-screener';
 import MarketOverviewStats from '@/components/analysis/market-overview-stats';
@@ -63,6 +64,7 @@ export default function AnalysisPage() {
   const [opportunities, setOpportunities] = useState<TopOpportunity[]>([]);
   const [opLoading, setOpLoading] = useState(true);
   const [screenerSector, setScreenerSector] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const fetchTopOpportunities = useCallback(async () => {
     try {
@@ -94,7 +96,12 @@ export default function AnalysisPage() {
 
   useEffect(() => {
     void fetchTopOpportunities();
-  }, [fetchTopOpportunities]);
+  }, [fetchTopOpportunities, refreshKey]);
+
+  const handleRefreshAll = () => {
+    setOpLoading(true);
+    setRefreshKey(k => k + 1);
+  };
 
   const handleSectorClick = (sector: string) => {
     setScreenerSector(sector);
@@ -121,13 +128,27 @@ export default function AnalysisPage() {
               <div className="size-12 rounded-xl bg-primary/15 flex items-center justify-center">
                 <BarChart3 className="size-6 text-primary" />
               </div>
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-                  EGX Financial Intelligence
-                </h1>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  Multi-model fair value analysis across 260 Egyptian stocks
-                </p>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+                      EGX Financial Intelligence
+                    </h1>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Multi-model fair value analysis across 260 Egyptian stocks
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 shrink-0"
+                    onClick={handleRefreshAll}
+                    disabled={opLoading}
+                  >
+                    <RefreshCw className={`size-3.5 ${opLoading ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </Button>
+                </div>
               </div>
             </div>
             <div className="flex flex-wrap gap-2 mt-4">
@@ -251,7 +272,7 @@ export default function AnalysisPage() {
           <TabsContent value="screener" className="mt-6">
             <AnimatePresence mode="wait">
               <motion.div key="screener" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <StockScreener />
+                <StockScreener defaultSector={screenerSector} />
               </motion.div>
             </AnimatePresence>
           </TabsContent>

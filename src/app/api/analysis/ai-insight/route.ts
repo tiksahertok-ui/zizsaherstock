@@ -156,7 +156,7 @@ function generateFallbackInsight(
     lines.push(`**Financial Health:** D/E ratio of ${f.debtEquity.toFixed(2)} ${f.debtEquity > 2 ? 'is elevated, suggesting higher financial risk.' : 'is within acceptable range.'} ${f.dividendYield > 0 ? `Dividend yield of ${f.dividendYield.toFixed(1)}% provides income to shareholders.` : ''}\n`);
   }
 
-  lines.push(`**Data Quality:** ${f.dataQuality || 0}/100 — ${fv.activeModels} valuation models active.\n`);
+  lines.push(`**Data Quality:** ${fv.dataQuality || 0}/100 — ${fv.activeModels} valuation models active.\n`);
   lines.push(`*Analysis based on TradingView fundamental data. Not financial advice.*`);
 
   return lines.join('\n');

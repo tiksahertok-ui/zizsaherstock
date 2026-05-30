@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  ArrowUpDown, ArrowUp, ArrowDown, Filter, Loader2, TrendingUp,
-  TrendingDown, Minus, ChevronRight, X, RotateCcw, SlidersHorizontal, Star,
+  ArrowUpDown, ArrowUp, ArrowDown, Filter, TrendingUp,
+  TrendingDown, Minus, ChevronRight, X, RotateCcw, SlidersHorizontal, Star, RefreshCw,
 } from 'lucide-react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -26,6 +26,10 @@ import { EGX_STOCKS } from '@/lib/egx-stocks';
 import { isWatched, addToWatchlist, removeFromWatchlist } from '@/lib/watchlist-store';
 
 // ── Types ──────────────────────────────────────────────────────
+
+interface ScreenerProps {
+  defaultSector?: string | null;
+}
 
 interface ScreenerSummary {
   total: number;
@@ -166,13 +170,16 @@ function ScreenerSkeleton() {
 
 // ── Component ──────────────────────────────────────────────────
 
-export default function StockScreener() {
+export default function StockScreener({ defaultSector }: ScreenerProps) {
   const [results, setResults] = useState<FairValueResult[]>([]);
   const [summary, setSummary] = useState<ScreenerSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<FilterState>(defaultFilters);
+  const [filters, setFilters] = useState<FilterState>({ ...defaultFilters, sector: defaultSector || 'All' });
   const [watchedSymbols, setWatchedSymbols] = useState<Set<string>>(new Set());
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const prevDefaultSector = useRef(defaultSector);
 
   // Load watchlist
   useEffect(() => {
@@ -180,8 +187,22 @@ export default function StockScreener() {
     setWatchedSymbols(new Set(list));
   }, []);
 
-  const fetchScreener = useCallback(async () => {
-    setLoading(true);
+  // Sync defaultSector prop changes from parent (e.g. sector click in Overview)
+  useEffect(() => {
+    if (defaultSector !== undefined && defaultSector !== prevDefaultSector.current) {
+      prevDefaultSector.current = defaultSector;
+      if (defaultSector) {
+        setFilters(f => ({ ...f, sector: defaultSector }));
+      }
+    }
+  }, [defaultSector]);
+
+  const fetchScreener = useCallback(async (isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     try {
       const params = new URLSearchParams();
@@ -208,11 +229,13 @@ export default function StockScreener() {
       const data = await res.json();
       setResults(data.results || []);
       setSummary(data.summary || null);
+      setLastUpdated(new Date());
     } catch (err) {
       console.error('Screener fetch error:', err);
       setError('Failed to load screener data');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [filters]);
 
@@ -325,6 +348,18 @@ export default function StockScreener() {
             Reset
           </Button>
         )}
+
+        {/* Refresh Button */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 ml-auto"
+          onClick={() => void fetchScreener(true)}
+          disabled={loading || refreshing}
+        >
+          <RefreshCw className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
       </div>
 
       {/* Advanced Filters Panel */}
@@ -621,11 +656,16 @@ export default function StockScreener() {
               </Table>
             </div>
             {results.length > 0 && (
-              <div className="px-4 py-2 border-t bg-muted/20">
+              <div className="px-4 py-2 border-t bg-muted/20 flex items-center justify-between">
                 <p className="text-[11px] text-muted-foreground">
                   Showing {results.length} of {summary?.filteredTotal ?? summary?.total ?? results.length} stocks
-                  &middot; Data from TradingView &middot; Updated every 2 min
+                  &middot; Data from TradingView
                 </p>
+                {lastUpdated && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Updated: {lastUpdated.toLocaleTimeString()}
+                  </p>
+                )}
               </div>
             )}
           </CardContent>
