@@ -52,3 +52,41 @@ Stage Summary:
 - Market status correctly accounts for Egyptian holidays (Eid Al-Adha 2026-05-28)
 - Gold EGP change % is purely from Egyptian gold sources (localStorage tracking)
 - Dev server starts and serves pages correctly
+---
+Task ID: 2
+Agent: full-stack-developer
+Task: Rebuild entire Analysis section into institutional-grade financial analysis platform
+
+Work Log:
+- Read all existing source files to understand codebase: egx-stocks.ts (260 stocks), egx-sectors.ts, fundamentals.ts, fair-value-engine.ts, market-data.ts, formatters.ts
+- Read existing analysis pages, components, and API routes to understand current state
+- Created `src/lib/watchlist-store.ts` — localStorage-based watchlist manager with getWatchlist, addToWatchlist, removeFromWatchlist, isWatched functions
+- Enhanced `src/app/api/analysis/screener/route.ts` — added 15+ new filters (minPrice, maxPrice, minMarketCap, maxMarketCap, minPE, maxPE, minROE, maxDebtEquity, minDividendYield, minRevenueGrowth, minUpside, maxUpside), fixed marketcap/PE sorting to use actual fundamental data, added top_gainers/top_losers sort options, increased limit to 260, added market_breadth parameter, reduced cache to 120s
+- Created `src/app/api/analysis/sector-overview/route.ts` — returns sector-level aggregated data (avg change%, top/worst performer, avg PE, avg ROE, stock count, total market cap)
+- Created `src/app/api/analysis/peers/route.ts` — peer comparison endpoint returning up to 15 stocks from same sector with key metrics
+- Created `src/app/api/analysis/sensitivity/route.ts` — DCF sensitivity analysis returning 5x5 matrix (WACC 10-30% vs Growth 0-25%) with fair values, current price, and base case identification
+- Created `src/components/analysis/tradingview-chart.tsx` — TradingView Advanced Chart widget with RSI/MACD studies, dark/light theme support, responsive sizing via useEffect script injection
+- Created `src/components/analysis/technical-analysis-section.tsx` — displays RSI gauge/bar, MACD signal, Stochastic, TradingView technical rating, moving averages table (SMA/EMA 20/50/100/200), Bollinger Bands, ATR, 52-week range with visual indicator, support/resistance levels
+- Created `src/components/analysis/sensitivity-matrix.tsx` — 5x5 DCF sensitivity heatmap with color coding (green=undervalued, red=overvalued), base case highlighting, legend
+- Created `src/components/analysis/peer-comparison-table.tsx` — peer comparison table with best-in-class highlighting (green), target stock row highlighting, responsive column visibility
+- Created `src/components/analysis/sector-overview.tsx` — sector performance cards grid with change color coding, gradient backgrounds, top performer display, click-to-filter, framer-motion stagger animations
+- Created `src/components/analysis/watchlist-panel.tsx` — watchlist management with add/remove, empty state, live data from screener API, framer-motion layout animations
+- Created `src/components/analysis/market-overview-stats.tsx` — quick market stats (EGX30 price/change, analyzed count, best opportunity, high confidence count) with framer-motion stagger animations
+- Completely rewrote `src/components/analysis/stock-screener.tsx` — added 15+ filter controls (price range, market cap selector, PE range, ROE, D/E, div yield, revenue growth, upside range), advanced filter panel with expand/collapse, watchlist star toggle on each row, reset filters button, active filters badge, column visibility responsive
+- Completely rewrote `src/app/analysis/page.tsx` — new landing page with hero section ("EGX Financial Intelligence"), tab navigation (Overview/Screener/Watchlist/Market Map), quick stats row from live API, sector performance cards, top opportunities section (high confidence undervalued), framer-motion page transitions
+- Completely rewrote `src/app/analysis/[symbol]/page.tsx` — institutional-grade stock page with company header (watchlist button, market cap, sector badge), tab navigation (Overview/Valuation/Technicals/Peers/Research), TradingView Advanced Chart, fair value gauge + 3 price targets, valuation breakdown with 4 models, DCF sensitivity matrix, financial ratios dashboard, technical analysis section, peer comparison table, AI research report
+- All components include skeleton loading states, error states with retry buttons
+- All components are mobile-first responsive design
+- Dark mode support throughout via existing theme system
+- Emerald/green primary color scheme (no blue/indigo)
+- framer-motion animations for page transitions, stagger effects, layout animations
+
+Stage Summary:
+- 15 files created/modified in total
+- 4 new API routes: sector-overview, peers, sensitivity, enhanced screener
+- 7 new components: TradingView chart, technical analysis, sensitivity matrix, peer comparison, sector overview, watchlist panel, market overview stats
+- 2 major page rewrites: analysis landing page, individual stock page
+- 1 enhanced component: stock screener (15+ new filter controls)
+- 1 new utility: watchlist-store.ts
+- All data sourced from TradingView Scanner API (no mock data)
+- ESLint passes for all new files (pre-existing error in portfolio-charts.tsx unrelated)
