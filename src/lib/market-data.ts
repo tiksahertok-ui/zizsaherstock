@@ -29,7 +29,7 @@ for (const [sym, tv] of Object.entries(TV_SYMBOL_MAP)) {
   TV_TO_INTERNAL[tv.toLowerCase()] = sym;
 }
 
-function toTvTicker(symbol: string): string {
+export function toTvTicker(symbol: string): string {
   const upper = symbol.toUpperCase();
   if (TV_SYMBOL_MAP[upper]) return TV_SYMBOL_MAP[upper];
   // Special index mappings
@@ -39,7 +39,7 @@ function toTvTicker(symbol: string): string {
   return `EGX:${upper}`;
 }
 
-function fromTvTicker(tvTicker: string): string {
+export function fromTvTicker(tvTicker: string): string {
   const upper = tvTicker.toUpperCase();
   // Check direct mapping first
   if (TV_TO_INTERNAL[upper]) return TV_TO_INTERNAL[upper];

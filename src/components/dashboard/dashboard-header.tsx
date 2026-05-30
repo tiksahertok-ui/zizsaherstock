@@ -9,10 +9,11 @@ import {
   Moon,
   LogOut,
   Lock,
+  BarChart3,
 } from 'lucide-react';
 
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import type { LocalProfile } from '@/types';
 
 interface DashboardHeaderProps {
@@ -57,6 +58,18 @@ export function DashboardHeader({
               <Separator orientation="vertical" className="hidden sm:block h-6" />
             </>
           )}
+
+          <Link href="/analysis">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-full text-muted-foreground hover:text-foreground"
+              aria-label="Financial Analysis"
+            >
+              <BarChart3 className="h-4 w-4 mr-1.5" />
+              <span className="hidden sm:inline">Analysis</span>
+            </Button>
+          </Link>
 
           {/* Theme toggle */}
           <Button
