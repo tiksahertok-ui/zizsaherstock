@@ -14,6 +14,7 @@ import {
 
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
 import type { LocalProfile } from '@/types';
 
 interface DashboardHeaderProps {
