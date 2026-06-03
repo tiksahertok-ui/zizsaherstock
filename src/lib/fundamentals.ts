@@ -6,6 +6,9 @@
  *
  * Data includes: P/E, P/B, EV/EBITDA, EPS, Revenue, Net Income,
  * Margins, ROE, ROA, Debt ratios, Dividends, Cash flow, etc.
+ *
+ * Enhanced with EGP currency validation, data source tracking,
+ * and quality scoring across weighted categories.
  */
 
 import { toTvTicker, fromTvTicker } from './market-data';
@@ -73,6 +76,8 @@ const fundCache = new Map<string, { data: Record<string, FundamentalData>; ts: n
 const FUND_CACHE_TTL = 300_000; // 5 minutes (fundamental data changes slowly)
 
 // ── Types ──────────────────────────────────────────────────────
+
+export type DataSource = 'tradingview' | 'yahoo' | 'mubasher' | 'validated';
 
 export interface FundamentalData {
   symbol: string;
@@ -142,6 +147,14 @@ export interface FundamentalData {
   hasBalanceSheet: boolean;
   hasCashFlow: boolean;
   hasGrowth: boolean;
+
+  // Currency validation
+  isEGP: boolean;
+
+  // Data source tracking
+  dataSource: DataSource;
+  dataQualityScore: number;
+  validatedAt: string | null;
 }
 
 // ── Utility ──────────────────────────────────────────────────────
@@ -223,7 +236,11 @@ export async function fetchFundamentals(
         const totalLiabilities = get("total_liabilities");
         const stockholdersEquity = get("stockholders_equity");
 
-        batchResult[sym] = {
+        // Currency validation
+        const currency = getStr("currency", "EGP").toUpperCase();
+        const isEGP = currency === "EGP" || currency.includes("EGP");
+
+        const fundamental: FundamentalData = {
           symbol: sym,
           name: getStr("name", sym),
 
@@ -233,7 +250,7 @@ export async function fetchFundamentals(
           changeAbs: get("change_abs"),
           volume: get("volume"),
           marketCap: get("market_cap_basic"),
-          currency: getStr("currency", "EGP"),
+          currency,
           week52High: get("price_52_week_high"),
           week52Low: get("price_52_week_low"),
           beta: get("beta_1_year"),
@@ -291,7 +308,20 @@ export async function fetchFundamentals(
           hasBalanceSheet: totalAssets > 0,
           hasCashFlow: freeCashFlow !== 0 || operatingCashFlow !== 0,
           hasGrowth: get("revenue_growth_yoy") !== 0 || get("earnings_growth_yoy") !== 0,
+
+          // Currency validation
+          isEGP,
+
+          // Data source tracking
+          dataSource: 'tradingview' as DataSource,
+          dataQualityScore: 0,
+          validatedAt: null,
         };
+
+        // Compute and assign quality score
+        fundamental.dataQualityScore = getEnhancedQualityScore(fundamental).overall;
+
+        batchResult[sym] = fundamental;
       }
       return batchResult;
     })
@@ -338,4 +368,172 @@ export function getFundamentalQualityScore(f: FundamentalData): number {
   if (f.revenueGrowth !== 0 || f.earningsGrowth !== 0) score++;
 
   return Math.round((score / maxScore) * 100);
+}
+
+// ── Enhanced Quality Scoring ─────────────────────────────────────
+
+export interface QualityCategoryScores {
+  price: number;
+  valuation: number;
+  profitability: number;
+  balanceSheet: number;
+  cashFlow: number;
+  growth: number;
+  perShare: number;
+}
+
+export interface EnhancedQualityResult {
+  overall: number;
+  categories: QualityCategoryScores;
+  warnings: string[];
+}
+
+/**
+ * Enhanced data quality score (0-100) with weighted categories.
+ * Categories: Price (15), Valuation (20), Profitability (20),
+ * Balance Sheet (15), Cash Flow (15), Growth (10), Per-Share (5)
+ */
+export function getEnhancedQualityScore(f: FundamentalData): EnhancedQualityResult {
+  const warnings: string[] = [];
+
+  // ── Price (15 points) ──
+  let priceScore = 0;
+  if (f.price > 0) priceScore += 5;
+  if (f.change !== 0) priceScore += 3;
+  if (f.volume > 0) priceScore += 2;
+  if (f.marketCap > 0) priceScore += 3;
+  if (f.beta > 0) priceScore += 2;
+
+  // ── Valuation (20 points) ──
+  let valuationScore = 0;
+  if (f.pe > 0) valuationScore += 5;
+  else warnings.push("Missing P/E ratio");
+  if (f.pb > 0) valuationScore += 4;
+  if (f.evEbitda > 0) valuationScore += 4;
+  else warnings.push("Missing EV/EBITDA");
+  if (f.ps > 0) valuationScore += 4;
+  if (f.peg > 0) valuationScore += 3;
+
+  // ── Profitability (20 points) ──
+  let profitabilityScore = 0;
+  if (f.revenue > 0) profitabilityScore += 4;
+  else warnings.push("Missing revenue");
+  if (f.grossProfit > 0) profitabilityScore += 3;
+  if (f.grossMargin > 0) profitabilityScore += 3;
+  if (f.operatingMargin > 0) profitabilityScore += 3;
+  if (f.netMargin > 0) profitabilityScore += 3;
+  if (f.roe > 0) profitabilityScore += 2;
+  else warnings.push("Missing ROE");
+  if (f.roa > 0) profitabilityScore += 2;
+
+  // ── Balance Sheet (15 points) ──
+  let balanceSheetScore = 0;
+  if (f.totalAssets > 0) balanceSheetScore += 3;
+  else warnings.push("Missing total assets");
+  if (f.totalLiabilities > 0) balanceSheetScore += 2;
+  if (f.stockholdersEquity > 0) balanceSheetScore += 3;
+  if (f.totalDebt > 0 || f.debtEquity >= 0) balanceSheetScore += 3;
+  if (f.workingCapital !== 0) balanceSheetScore += 2;
+  if (f.cash > 0) balanceSheetScore += 2;
+
+  // ── Cash Flow (15 points) ──
+  let cashFlowScore = 0;
+  if (f.operatingCashFlow !== 0) cashFlowScore += 4;
+  else warnings.push("Missing operating cash flow");
+  if (f.freeCashFlow !== 0) cashFlowScore += 4;
+  if (f.capex !== 0) cashFlowScore += 3;
+  if (f.operatingIncome > 0) cashFlowScore += 2;
+  if (f.netIncome !== 0) cashFlowScore += 2;
+
+  // ── Growth (10 points) ──
+  let growthScore = 0;
+  if (f.revenueGrowth !== 0) growthScore += 5;
+  else warnings.push("Missing revenue growth");
+  if (f.earningsGrowth !== 0) growthScore += 5;
+  else warnings.push("Missing earnings growth");
+
+  // ── Per-Share (5 points) ──
+  let perShareScore = 0;
+  if (f.eps > 0) perShareScore += 2;
+  else warnings.push("Missing EPS");
+  if (f.bvps > 0) perShareScore += 1;
+  if (f.dps > 0) perShareScore += 1;
+  if (f.sharesOutstanding > 0) perShareScore += 1;
+
+  const overall = Math.round(
+    priceScore +
+    valuationScore +
+    profitabilityScore +
+    balanceSheetScore +
+    cashFlowScore +
+    growthScore +
+    perShareScore
+  );
+
+  // Currency warning
+  if (!f.isEGP) {
+    warnings.push(`Currency is ${f.currency}, not EGP`);
+  }
+
+  return {
+    overall,
+    categories: {
+      price: priceScore,
+      valuation: valuationScore,
+      profitability: profitabilityScore,
+      balanceSheet: balanceSheetScore,
+      cashFlow: cashFlowScore,
+      growth: growthScore,
+      perShare: perShareScore,
+    },
+    warnings,
+  };
+}
+
+// ── EGP Filtering ────────────────────────────────────────────────
+
+/**
+ * Filter fundamentals to only include EGP-denominated stocks.
+ * Returns filtered map + count of filtered-out stocks.
+ */
+export function filterEGPOnly(
+  fundamentals: Record<string, FundamentalData>
+): { filtered: Record<string, FundamentalData>; removedCount: number; removedSymbols: string[] } {
+  const filtered: Record<string, FundamentalData> = {};
+  const removedSymbols: string[] = [];
+
+  for (const [symbol, data] of Object.entries(fundamentals)) {
+    if (data.isEGP) {
+      filtered[symbol] = data;
+    } else {
+      removedSymbols.push(symbol);
+    }
+  }
+
+  return {
+    filtered,
+    removedCount: removedSymbols.length,
+    removedSymbols,
+  };
+}
+
+// ── EGP Validated Fetch ─────────────────────────────────────────
+
+/**
+ * Fetch fundamentals for all EGX stocks, filter to EGP only,
+ * and return validated results.
+ */
+export async function fetchAllEGPValidatedStocks(): Promise<Record<string, FundamentalData>> {
+  const allFundamentals = await fetchAllEGXFundamentals();
+
+  const { filtered } = filterEGPOnly(allFundamentals);
+
+  // Stamp validation metadata on each entry
+  const now = new Date().toISOString();
+  for (const data of Object.values(filtered)) {
+    data.dataSource = 'validated';
+    data.validatedAt = now;
+  }
+
+  return filtered;
 }

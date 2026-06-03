@@ -1,20 +1,25 @@
 /**
- * Professional Fair Value Engine for EGX Stocks
- * ──────────────────────────────────────────────
- * Calculates intrinsic/fair value using 5 professional valuation models:
+ * Professional Fair Value Engine for EGX Stocks (v3 — Sector-Aware)
+ * ────────────────────────────────────────────────────────────────
+ * Calculates intrinsic/fair value using 4 professional valuation models
+ * with sector-specific weights and CFA-standard formulas:
  *
- *   1. DCF (Discounted Cash Flow)
- *   2. Relative Valuation (P/E, P/B, EV/EBITDA, P/S peer comparison)
- *   3. Dividend Discount Model (DDM)
- *   4. Asset-Based Valuation (Book Value + adjustments)
- *   5. Multi-Model Weighted (combines all models)
+ *   1. DCF (Discounted Cash Flow) — NOPAT approach
+ *   2. Relative Valuation (P/E, P/B, EV/EBITDA, P/S, PEG)
+ *   3. Dividend Discount Model (DDM) — Gordon Growth
+ *   4. Asset-Based Valuation (Book Value + ROE premium)
  *
- * All calculations use REAL financial data from TradingView.
- * Assumptions are transparent and dynamically adjusted.
+ * Key enhancements over v2:
+ *   - Sector-specific model weights (from egx-sectors.ts)
+ *   - WACC uses actual company debt ratio, not assumed 30%
+ *   - DCF uses proper NOPAT approach (CFA Institute standard)
+ *   - Sector-specific growth, terminal, FCF, and WACC parameters
+ *   - EGP currency validation
+ *   - Sector-specific relative valuation weights (which multiples matter most)
  */
 
 import type { FundamentalData } from './fundamentals';
-import { getSectorBenchmark, EGYPT_MARKET_AVG, type SectorBenchmark } from './egx-sectors';
+import { getSectorBenchmark, getSectorValuationProfile, EGYPT_MARKET_AVG, type SectorBenchmark } from './egx-sectors';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -29,9 +34,11 @@ export interface DCFResult {
   assumptions: {
     revenueGrowthBase: number;
     fcfMargin: number;
-    waccComponents: { riskFreeRate: number; beta: number; equityRiskPremium: number; sizePremium: number };
+    waccComponents: { riskFreeRate: number; beta: number; equityRiskPremium: number; sizePremium: number; debtRatio: number; costOfDebt: number; taxRate: number };
     terminalGrowth: number;
     projectionYears: number;
+    nopat: number;
+    reinvestmentRate: number;
   };
   intrinsicValue: number;
 }
@@ -41,10 +48,12 @@ export interface RelativeResult {
   pbFairValue: number;
   evEbitdaFairValue: number;
   psFairValue: number;
+  pegFairValue: number;
   sectorAvgPE: number;
   sectorAvgPB: number;
   sectorAvgEVEbitda: number;
   sectorAvgPS: number;
+  relativeWeights: { pe: number; pb: number; evEbitda: number; ps: number; peg: number };
   weightedValue: number;
 }
 
@@ -102,64 +111,157 @@ export interface FairValueResult {
   calculatedAt: string;
 }
 
-// ── Helper: WACC Calculation ────────────────────────────────────
+export interface ModelWeights {
+  dcf: number;
+  relative: number;
+  ddm: number;
+  asset: number;
+}
+
+// ── Helper: WACC Calculation (CFA-standard, company-specific) ──
+//
+// Uses the ACTUAL company debt ratio derived from totalDebt and
+// stockholdersEquity, rather than a blanket assumed 30%.
+// Cost of debt is derived from interest expense / total debt when
+// operating income is available; otherwise falls back to sector default.
+//
+// WACC = (D/V × Rd × (1 - T)) + (E/V × Re)
+// Re = Rf + β × ERP + SP
 
 function calculateWACC(
   beta: number,
+  totalDebt: number,
+  totalEquity: number,
+  operatingIncome: number,
   riskFreeRate: number = EGYPT_MARKET_AVG.riskFreeRate,
   equityRiskPremium: number = EGYPT_MARKET_AVG.marketRiskPremium,
-  sizePremium: number = 0.03, // Small-cap premium for Egypt
-  debtCost: number = 0.20, // Average Egyptian corporate borrowing rate
-  debtRatio: number = 0.3 // Assumed 30% debt in capital structure
+  sizePremium: number = 0.03,
+  taxRate: number = 0.225,
+  sectorCostOfDebt: number = 0.25,
+  sectorDebtRatio: number = 0.30,
 ): number {
-  const betaAdj = Math.max(0.5, Math.min(2.0, beta || 1.0));
+  const totalCapital = totalDebt + totalEquity;
+  const debtRatio = totalCapital > 0 ? totalDebt / totalCapital : sectorDebtRatio;
+  const equityRatio = 1 - debtRatio;
+
+  // Cost of debt: derive from interest coverage if operating income available
+  // Assume interest expense ≈ 15% of operating income as proxy
+  // For banks/financials, totalDebt is deposits — cost is net interest margin
+  const interestExpense = operatingIncome > 0 ? operatingIncome * 0.15 : 0;
+  const costOfDebt = totalDebt > 0
+    ? Math.max(0.10, Math.min(0.40, interestExpense / totalDebt))
+    : sectorCostOfDebt;
+
+  // Clamp beta to reasonable range (CFA convention)
+  const betaAdj = Math.max(0.5, Math.min(2.5, beta || 1.0));
+
+  // Cost of equity (CAPM + size premium)
   const costOfEquity = riskFreeRate + betaAdj * equityRiskPremium + sizePremium;
-  const wacc = (debtRatio * debtCost * (1 - 0.225)) + ((1 - debtRatio) * costOfEquity); // 22.5% Egyptian corporate tax
-  return Math.max(0.10, Math.min(0.45, wacc)); // Clamp 10-45%
+
+  // Weighted average cost of capital
+  const wacc = (debtRatio * costOfDebt * (1 - taxRate)) + (equityRatio * costOfEquity);
+
+  // Clamp to [8%, 50%] — reasonable bounds for Egyptian market
+  return Math.max(0.08, Math.min(0.50, wacc));
 }
 
-// ── Model 1: DCF ────────────────────────────────────────────────
+// ── Model 1: DCF (NOPAT Approach — CFA Institute standard) ──────
+//
+// Instead of the simplistic "EPS × growth" method, we use:
+//
+//   NOPAT         = Operating Income × (1 - Tax Rate)
+//   Reinvestment  = NOPAT × Reinvestment Rate
+//   FCF           = NOPAT - Reinvestment
+//
+// Reinvestment Rate = (CapEx - Depreciation + Change in WC) / NOPAT
+// We approximate as: CapEx / Operating Income when explicit WC not available.
 
-export function calculateDCF(f: FundamentalData): DCFResult | null {
+export function calculateDCF(
+  f: FundamentalData,
+  sector?: string,
+): DCFResult | null {
+  // ── EGP Currency Validation ──
+  if (f.currency && f.currency !== 'EGP') return null;
+
   if (!f.eps || f.eps <= 0 || f.sharesOutstanding <= 0) return null;
 
-  const projectionYears = 5;
-  const eps = f.eps;
+  // Get sector-specific parameters
+  const profile = getSectorValuationProfile(sector || 'Other');
+  const { dcfParams, waccParams } = profile;
+
   const shares = f.sharesOutstanding;
 
-  // Growth assumptions from real data
-  const revGrowth = f.revenueGrowth > 0 ? f.revenueGrowth / 100 : 0.10;
-  const revGrowthBase = Math.max(0.02, Math.min(0.35, revGrowth));
+  // ── NOPAT Calculation ──
+  // Operating Income is EBIT from TradingView
+  const operatingIncome = f.operatingIncome > 0
+    ? f.operatingIncome
+    : (f.grossProfit > 0 ? f.grossProfit * 0.70 : f.revenue > 0 ? f.revenue * f.operatingMargin / 100 : 0);
 
-  // FCF margin: derive from operating margin - capex ratio
-  const opMargin = f.operatingMargin > 0 ? f.operatingMargin / 100 : f.netMargin > 0 ? f.netMargin / 100 * 1.5 : 0.12;
-  const capExRatio = f.capex > 0 && f.revenue > 0 ? Math.abs(f.capex) / f.revenue : 0.04;
-  const fcfMargin = Math.max(0.03, opMargin - capExRatio);
+  if (operatingIncome <= 0) return null;
 
-  // Revenue per share projection
-  const revPerShare = f.revenuePerShare > 0 ? f.revenuePerShare : (f.revenue > 0 ? f.revenue / shares : eps * 8);
+  const taxRate = waccParams.taxRate;
+  const nopat = operatingIncome * (1 - taxRate);
 
-  const beta = f.beta > 0 ? f.beta : 1.0;
+  // ── Reinvestment Rate ──
+  // Approximate: CapEx / Operating Income
+  // (ignoring depreciation change, working capital change for simplicity)
+  const capEx = Math.abs(f.capex);
+  const reinvestmentRate = operatingIncome > 0
+    ? Math.max(0, Math.min(0.8, capEx / operatingIncome))
+    : dcfParams.capExRatio;
+
+  // ── Free Cash Flow ──
+  const reinvestment = nopat * reinvestmentRate;
+  const fcf = nopat - reinvestment;
+
+  if (fcf <= 0) return null;
+
+  // FCF per share
+  const fcfPerShare = fcf / shares;
+  const fcfMargin = f.revenue > 0 ? fcf / f.revenue : dcfParams.defaultFCFMargin;
+
+  // ── Growth Assumptions ──
+  const revGrowth = f.revenueGrowth > 0 ? f.revenueGrowth / 100 : dcfParams.baseGrowthRate;
+  const baseGrowthRate = Math.max(0.02, Math.min(0.35, revGrowth));
+  const terminalGrowth = dcfParams.terminalGrowthRate;
+  const projectionYears = dcfParams.projectionYears;
+
+  // ── WACC ──
+  const beta = f.beta > 0 ? f.beta : waccParams.defaultBeta;
   const riskFreeRate = EGYPT_MARKET_AVG.riskFreeRate;
-  const equityRiskPremium = EGYPT_MARKET_AVG.marketRiskPremium;
-  const terminalGrowth = EGYPT_MARKET_AVG.terminalGrowth;
+  const wacc = calculateWACC(
+    beta,
+    f.totalDebt,
+    f.stockholdersEquity,
+    operatingIncome,
+    riskFreeRate,
+    waccParams.equityRiskPremium,
+    waccParams.sizePremium,
+    taxRate,
+    waccParams.costOfDebt,
+    waccParams.defaultDebtRatio,
+  );
 
-  const wacc = calculateWACC(beta, riskFreeRate, equityRiskPremium);
+  // Validate: WACC must exceed terminal growth for Gordon Growth
+  if (wacc <= terminalGrowth) return null;
+
+  // ── Project FCF per share ──
   const projectedFCF: number[] = [];
+  let currentFCFPS = fcfPerShare;
 
-  let currentRevPS = revPerShare;
   for (let i = 0; i < projectionYears; i++) {
-    // Decaying growth rate (converges to terminal growth)
-    const yearGrowth = revGrowthBase * Math.pow(terminalGrowth / revGrowthBase, i / (projectionYears - 1));
-    currentRevPS *= (1 + yearGrowth);
-    projectedFCF.push(currentRevPS * fcfMargin);
+    // Decaying growth rate (converges to terminal growth over projection period)
+    // Uses geometric interpolation: g(t) = g_base × (g_terminal / g_base)^(t/(N-1))
+    const yearGrowth = baseGrowthRate * Math.pow(terminalGrowth / baseGrowthRate, i / (projectionYears - 1));
+    currentFCFPS *= (1 + yearGrowth);
+    projectedFCF.push(currentFCFPS);
   }
 
-  // Terminal value (Gordon Growth Model)
-  const lastFCF = projectedFCF[projectedFCF.length - 1];
+  // ── Terminal Value (Gordon Growth Model) ──
+  const lastFCF = projectedFCF[projectionYears - 1] || projectedFCF[projectedFCF.length - 1];
   const terminalValue = (lastFCF * (1 + terminalGrowth)) / (wacc - terminalGrowth);
 
-  // Discount all cash flows
+  // ── Discount to Present Value ──
   let pvFCF = 0;
   for (let i = 0; i < projectionYears; i++) {
     pvFCF += projectedFCF[i] / Math.pow(1 + wacc, i + 1);
@@ -168,57 +270,88 @@ export function calculateDCF(f: FundamentalData): DCFResult | null {
 
   const intrinsicValue = pvFCF + pvTerminal;
 
+  if (!isFinite(intrinsicValue) || intrinsicValue <= 0) return null;
+
   return {
     projectedFCF,
     terminalValue,
     wacc,
     fcfYield: fcfMargin,
-    growthRate: revGrowthBase,
+    growthRate: baseGrowthRate,
     assumptions: {
-      revenueGrowthBase: revGrowthBase * 100,
+      revenueGrowthBase: baseGrowthRate * 100,
       fcfMargin: fcfMargin * 100,
       waccComponents: {
         riskFreeRate,
         beta,
-        equityRiskPremium,
-        sizePremium: 0.03,
+        equityRiskPremium: waccParams.equityRiskPremium,
+        sizePremium: waccParams.sizePremium,
+        debtRatio: (f.totalDebt + f.stockholdersEquity) > 0 ? f.totalDebt / (f.totalDebt + f.stockholdersEquity) : waccParams.defaultDebtRatio,
+        costOfDebt: waccParams.costOfDebt,
+        taxRate,
       },
       terminalGrowth,
       projectionYears,
+      nopat,
+      reinvestmentRate,
     },
     intrinsicValue,
   };
 }
 
-// ── Model 2: Relative Valuation ────────────────────────────────
+// ── Model 2: Relative Valuation (Sector-Weighted Multiples) ────
+//
+// Uses sector-specific relative weights to emphasize the multiples
+// that matter most for each sector (e.g., P/B for Financials, PEG for Tech).
 
 export function calculateRelative(
   f: FundamentalData,
   sector: string,
   benchmarks?: Record<string, SectorBenchmark>
 ): RelativeResult | null {
+  // ── EGP Currency Validation ──
+  if (f.currency && f.currency !== 'EGP') return null;
+
   if (f.eps <= 0 && f.bvps <= 0) return null;
 
   const bench = getSectorBenchmark(sector, benchmarks);
+  const profile = getSectorValuationProfile(sector, benchmarks);
+  const { relativeWeights } = profile;
 
-  // P/E fair value: EPS × Sector Average P/E
+  // ── P/E Fair Value: EPS × Sector Average P/E ──
   const peFairValue = f.eps > 0 ? f.eps * bench.avgPE : 0;
-  // P/B fair value: BVPS × Sector Average P/B
+
+  // ── P/B Fair Value: BVPS × Sector Average P/B ──
   const pbFairValue = f.bvps > 0 ? f.bvps * bench.avgPB : 0;
-  // EV/EBITDA fair value: EBITDA per share × Sector Average EV/EBITDA
+
+  // ── EV/EBITDA Fair Value: EBITDA per share × Sector Average ──
   const ebitdaPerShare = f.operatingIncome > 0 && f.sharesOutstanding > 0
     ? f.operatingIncome / f.sharesOutstanding
-    : f.eps * 3; // Rough approximation
+    : f.eps * 3; // Rough approximation: EBITDA ≈ 3× EPS
   const evEbitdaFairValue = ebitdaPerShare > 0 ? ebitdaPerShare * bench.avgEV_EBITDA : 0;
-  // P/S fair value: Revenue per share × Sector Average P/S
+
+  // ── P/S Fair Value: Revenue per share × Sector Average P/S ──
   const psFairValue = f.revenuePerShare > 0 ? f.revenuePerShare * bench.avgPS : 0;
 
-  // Count valid models for weighting
-  const validModels: { value: number; weight: number }[] = [];
-  if (peFairValue > 0) validModels.push({ value: peFairValue, weight: 0.35 }); // P/E most important
-  if (pbFairValue > 0) validModels.push({ value: pbFairValue, weight: 0.25 });
-  if (evEbitdaFairValue > 0) validModels.push({ value: evEbitdaFairValue, weight: 0.25 });
-  if (psFairValue > 0) validModels.push({ value: psFairValue, weight: 0.15 });
+  // ── PEG Fair Value: EPS × PEG × (1 + earnings growth) ──
+  // PEG = PE / (EPS growth rate). Fair PE = PEG × growth rate.
+  // If PEG < 1 → undervalued; PEG > 1 → overvalued.
+  let pegFairValue = 0;
+  if (f.eps > 0 && f.earningsGrowth > 0) {
+    const pegRatio = f.peg > 0 ? f.peg : (f.pe > 0 && f.earningsGrowth > 0 ? f.pe / f.earningsGrowth : 1.0);
+    // Fair PE from PEG = 1.0 × earnings growth rate, capped at sector avg PE
+    const fairPE = Math.min(pegRatio * f.earningsGrowth, bench.avgPE * 1.5);
+    pegFairValue = f.eps * fairPE;
+  }
+
+  // ── Weighted Combination (Sector-Specific Weights) ──
+  const validModels: Array<{ value: number; weight: number }> = [];
+
+  if (peFairValue > 0) validModels.push({ value: peFairValue, weight: relativeWeights.pe });
+  if (pbFairValue > 0) validModels.push({ value: pbFairValue, weight: relativeWeights.pb });
+  if (evEbitdaFairValue > 0) validModels.push({ value: evEbitdaFairValue, weight: relativeWeights.evEbitda });
+  if (psFairValue > 0) validModels.push({ value: psFairValue, weight: relativeWeights.ps });
+  if (pegFairValue > 0) validModels.push({ value: pegFairValue, weight: relativeWeights.peg });
 
   if (validModels.length === 0) return null;
 
@@ -231,38 +364,69 @@ export function calculateRelative(
     pbFairValue,
     evEbitdaFairValue,
     psFairValue,
+    pegFairValue,
     sectorAvgPE: bench.avgPE,
     sectorAvgPB: bench.avgPB,
     sectorAvgEVEbitda: bench.avgEV_EBITDA,
     sectorAvgPS: bench.avgPS,
+    relativeWeights,
     weightedValue,
   };
 }
 
-// ── Model 3: Dividend Discount Model (DDM) ──────────────────────
+// ── Model 3: Dividend Discount Model (DDM — Gordon Growth) ─────
+//
+// V = D₁ / (r - g)
+// D₁ = D₀ × (1 + g)
+// r = required return (derived from sector-specific WACC as equity cost)
+// g = sustainable growth rate = ROE × (1 - payout ratio)
 
-export function calculateDDM(f: FundamentalData): DDMResult | null {
+export function calculateDDM(
+  f: FundamentalData,
+  sector?: string,
+): DDMResult | null {
+  // ── EGP Currency Validation ──
+  if (f.currency && f.currency !== 'EGP') return null;
+
   if (f.dividendYield <= 0 || f.eps <= 0) return null;
 
-  const beta = f.beta > 0 ? f.beta : 1.0;
-  const requiredReturn = calculateWACC(beta); // Cost of equity proxy
+  const profile = getSectorValuationProfile(sector || 'Other');
+  const { waccParams } = profile;
 
-  // Dividend per share from yield
+  const beta = f.beta > 0 ? f.beta : waccParams.defaultBeta;
+
+  // Required return = cost of equity (CAPM)
+  const requiredReturn = EGYPT_MARKET_AVG.riskFreeRate + beta * waccParams.equityRiskPremium + waccParams.sizePremium;
+
+  // Dividend per share
   const dps = f.dps > 0 ? f.dps : f.eps * (f.payoutRatio / 100);
   if (dps <= 0) return null;
 
-  // Growth rate: use earnings growth or dividend growth estimate
-  const growthRate = f.earningsGrowth > 0
-    ? Math.min(f.earningsGrowth / 100, requiredReturn - 0.01) // Growth < required return
-    : f.revenueGrowth > 0
-      ? Math.min(f.revenueGrowth / 100, requiredReturn - 0.01)
-      : 0.05; // Default 5%
-
-  if (growthRate >= requiredReturn) return null; // DDM breaks if g >= r
-
+  // Growth rate: sustainable growth = ROE × retention ratio
+  // Or use earnings/revenue growth if available
   const payoutRatio = f.payoutRatio > 0 ? f.payoutRatio : (dps / f.eps) * 100;
+  const retentionRatio = 1 - payoutRatio / 100;
 
+  let growthRate: number;
+  const roe = f.roe > 0 ? f.roe / 100 : 0;
+  if (roe > 0 && retentionRatio > 0) {
+    // Sustainable growth rate (CFA standard)
+    growthRate = Math.min(roe * retentionRatio, requiredReturn - 0.01);
+  } else if (f.earningsGrowth > 0) {
+    growthRate = Math.min(f.earningsGrowth / 100, requiredReturn - 0.01);
+  } else if (f.revenueGrowth > 0) {
+    growthRate = Math.min(f.revenueGrowth / 100, requiredReturn - 0.01);
+  } else {
+    growthRate = 0.05; // Default 5%
+  }
+
+  // DDM breaks if g >= r
+  if (growthRate >= requiredReturn) return null;
+
+  // Gordon Growth Model
   const intrinsicValue = dps * (1 + growthRate) / (requiredReturn - growthRate);
+
+  if (!isFinite(intrinsicValue) || intrinsicValue <= 0) return null;
 
   return {
     intrinsicValue,
@@ -272,21 +436,33 @@ export function calculateDDM(f: FundamentalData): DDMResult | null {
   };
 }
 
-// ── Model 4: Asset-Based Valuation ────────────────────────────
+// ── Model 4: Asset-Based Valuation ───────────────────────────────
+//
+// Adjusted BVPS = BVPS × (1 + ROE premium)
+// ROE premium: (ROE - avgROE) × multiplier, clamped [-30%, +80%]
+// This reflects the CFA principle that firms earning above their
+// cost of equity deserve to trade above book value, and vice versa.
 
-export function calculateAssetBased(f: FundamentalData): AssetResult | null {
+export function calculateAssetBased(
+  f: FundamentalData,
+  sector?: string,
+): AssetResult | null {
+  // ── EGP Currency Validation ──
+  if (f.currency && f.currency !== 'EGP') return null;
+
   if (f.bvps <= 0) return null;
 
+  const profile = getSectorValuationProfile(sector || 'Other');
   const bvps = f.bvps;
 
   // ROE premium: higher ROE justifies premium over book value
   const roe = f.roe > 0 ? f.roe / 100 : 0;
-  const avgROE = EGYPT_MARKET_AVG.avgROE / 100;
+  const avgROE = profile.avgROE / 100;
 
-  // Premium/discount based on ROE relative to market average
+  // Premium/discount based on ROE relative to sector average
   let premium = 0;
   if (roe > 0) {
-    premium = (roe - avgROE) * 3; // 3x multiplier for ROE spread
+    premium = (roe - avgROE) * 3; // 3× multiplier for ROE spread
   }
   premium = Math.max(-0.3, Math.min(0.8, premium)); // Clamp -30% to +80%
 
@@ -300,21 +476,15 @@ export function calculateAssetBased(f: FundamentalData): AssetResult | null {
   };
 }
 
-// ── Model 5: Multi-Model Weighted ──────────────────────────────
-
-export interface ModelWeights {
-  dcf: number;
-  relative: number;
-  ddm: number;
-  asset: number;
-}
+// ── Model 5: Multi-Model Weighted (Sector-Aware) ─────────────────
 
 export function calculateMultiModelWeighted(
   dcf: DCFResult | null,
   relative: RelativeResult | null,
   ddm: DDMResult | null,
   asset: AssetResult | null,
-  dataQuality: number
+  dataQuality: number,
+  sector: string,
 ): { fairValue: number; weights: ModelWeights } {
   const models: Array<{ value: number; key: keyof ModelWeights }> = [];
 
@@ -325,23 +495,26 @@ export function calculateMultiModelWeighted(
 
   if (models.length === 0) return { fairValue: 0, weights: { dcf: 0, relative: 0, ddm: 0, asset: 0 } };
 
-  // Default weights when all models available
-  const defaultWeights: ModelWeights = { dcf: 0.40, relative: 0.30, ddm: 0.15, asset: 0.15 };
+  // Sector-specific default weights
+  const profile = getSectorValuationProfile(sector);
+  const defaultWeights: ModelWeights = { ...profile.modelWeights };
 
   // Adjust weights based on data quality and available models
   let totalWeight = 0;
   const weights: ModelWeights = { dcf: 0, relative: 0, ddm: 0, asset: 0 };
 
   for (const model of models) {
-    // Boost DCF weight if data quality is high
     let w = defaultWeights[model.key];
-    if (model.key === 'dcf' && dataQuality > 70) w *= 1.2;
-    if (model.key === 'relative' && dataQuality < 40) w *= 0.7;
+
+    // Quality-based adjustments (CFA practice: higher quality → more weight to intrinsic models)
+    if (model.key === 'dcf' && dataQuality > 70) w *= 1.15;
+    if (model.key === 'relative' && dataQuality < 40) w *= 0.75;
+
     weights[model.key] = w;
     totalWeight += w;
   }
 
-  // Normalize
+  // Normalize and compute weighted average
   const fairValue = models.reduce((sum, model) => {
     return sum + (model.value * weights[model.key] / totalWeight);
   }, 0);
@@ -363,19 +536,26 @@ export function calculateFairValue(
 ): FairValueResult {
   const currentPrice = f.price;
 
-  // Run all 4 models
-  const dcf = calculateDCF(f);
-  const relative = calculateRelative(f, sector, sectorBenchmarks);
-  const ddm = calculateDDM(f);
-  const asset = calculateAssetBased(f);
+  // ── EGP Currency Gate ──
+  // If currency is explicitly non-EGP, return N/A
+  const isNonEGP = f.currency && f.currency !== 'EGP';
+
+  // Run all 4 models (pass sector for sector-aware calculations)
+  const dcf = isNonEGP ? null : calculateDCF(f, sector);
+  const relative = isNonEGP ? null : calculateRelative(f, sector, sectorBenchmarks);
+  const ddm = isNonEGP ? null : calculateDDM(f, sector);
+  const asset = isNonEGP ? null : calculateAssetBased(f, sector);
 
   // Data quality
   const dataQuality = getDataQuality(f);
   const activeModels = [dcf, relative, ddm, asset].filter(Boolean).length;
 
-  // Multi-model weighted
+  // Get sector thresholds
+  const profile = getSectorValuationProfile(sector, sectorBenchmarks);
+
+  // Multi-model weighted with sector-specific weights
   const { fairValue: weightedFairValue, weights } = calculateMultiModelWeighted(
-    dcf, relative, ddm, asset, dataQuality
+    dcf, relative, ddm, asset, dataQuality, sector
   );
 
   // Upside/downside
@@ -383,22 +563,24 @@ export function calculateFairValue(
     ? ((weightedFairValue - currentPrice) / currentPrice) * 100
     : 0;
 
-  // Valuation status
+  // Valuation status (sector-specific thresholds)
   let status: ValuationStatus = 'N/A';
-  if (weightedFairValue > 0 && currentPrice > 0) {
-    if (weightedUpside > 15) status = 'Undervalued';
-    else if (weightedUpside < -15) status = 'Overvalued';
+  if (isNonEGP) {
+    status = 'N/A';
+  } else if (weightedFairValue > 0 && currentPrice > 0) {
+    if (weightedUpside > profile.thresholds.undervaluedUpside) status = 'Undervalued';
+    else if (weightedUpside < profile.thresholds.overvaluedDownside) status = 'Overvalued';
     else status = 'Fairly Valued';
   }
 
-  // Confidence level
+  // Confidence level (sector-specific quality threshold)
   const confidence: 'High' | 'Medium' | 'Low' =
-    dataQuality > 60 && activeModels >= 3 ? 'High' :
+    dataQuality > profile.thresholds.highConfidenceQuality && activeModels >= 3 ? 'High' :
     dataQuality > 30 && activeModels >= 2 ? 'Medium' : 'Low';
 
-  // Price targets (scenario analysis)
-  const bullishTarget = weightedFairValue * 1.15;  // +15% above fair value
-  const bearishTarget = weightedFairValue * 0.85;    // -15% below fair value
+  // Price targets (scenario analysis — ±15% around fair value)
+  const bullishTarget = weightedFairValue * 1.15;
+  const bearishTarget = weightedFairValue * 0.85;
   const baseTarget = weightedFairValue;
 
   return {

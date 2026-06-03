@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchFundamentals } from "@/lib/fundamentals";
+import { fetchFundamentals, filterEGPOnly } from "@/lib/fundamentals";
 import { calculateFairValue } from "@/lib/fair-value-engine";
 import { EGX_STOCKS } from "@/lib/egx-stocks";
 import { computeSectorAverages } from "@/lib/egx-sectors";
@@ -53,7 +53,15 @@ export async function GET(request: NextRequest) {
 
     // Fetch fundamentals for ALL stocks in filtered set
     const allSymbols = stocks.map(s => s.symbol);
-    const fundData = await fetchFundamentals(allSymbols);
+    const rawFundData = await fetchFundamentals(allSymbols);
+
+    // Filter to EGP-only stocks and log removed non-EGP entries
+    const totalStocksBeforeEGP = Object.keys(rawFundData).length;
+    const { filtered: egpFiltered, removedCount, removedSymbols } = filterEGPOnly(rawFundData);
+    if (removedCount > 0) {
+      console.log(`[Screener] Removed ${removedCount} non-EGP stock(s): ${removedSymbols.join(', ')}`);
+    }
+    const fundData = egpFiltered;
 
     // Build a stock sectors map for sector average computation
     const stockSectorsMap: Record<string, string> = {};
@@ -84,6 +92,10 @@ export async function GET(request: NextRequest) {
           dividendYield: f.dividendYield,
           revenueGrowth: f.revenueGrowth,
           change: f.change,
+          // Data quality & validation info
+          dataQuality: f.dataQualityScore,
+          isEGP: f.isEGP,
+          currency: f.currency,
         };
       });
 
@@ -230,7 +242,21 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results: limited, summary, marketBreadth: breadthData }, {
+    // Data validation summary
+    const egpStocksCount = results.length;
+    const avgDataQuality = egpStocksCount > 0
+      ? Math.round(results.reduce((sum, r) => sum + r.dataQuality, 0) / egpStocksCount)
+      : 0;
+
+    const dataValidation = {
+      totalStocks: totalStocksBeforeEGP,
+      egpStocks: egpStocksCount,
+      nonEgpRemoved: removedCount,
+      avgDataQuality,
+      dataSource: "tradingview+validation" as const,
+    };
+
+    return NextResponse.json({ results: limited, summary, marketBreadth: breadthData, dataValidation }, {
       headers: { "Cache-Control": "public, max-age=120, stale-while-revalidate=30" },
     });
   } catch (error) {
