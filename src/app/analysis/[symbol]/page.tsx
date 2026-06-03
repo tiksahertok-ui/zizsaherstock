@@ -21,6 +21,8 @@ import {
   AlertTriangle,
   Clock,
   Eye,
+  FileSearch,
+  Gauge,
 } from 'lucide-react';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -39,6 +41,9 @@ import TechnicalAnalysisSection from '@/components/analysis/technical-analysis-s
 import PeerComparisonTable from '@/components/analysis/peer-comparison-table';
 import MonteCarloChart from '@/components/analysis/monte-carlo-chart';
 import ResearchReport from '@/components/analysis/research-report';
+import SectorModelsPanel from '@/components/analysis/sector-models-panel';
+import ConfidenceScorePanel from '@/components/analysis/confidence-score-panel';
+import AuditTrailPanel from '@/components/analysis/audit-trail-panel';
 
 import { fmtCurrency, fmtPercent, fmtNumber, pnlColor, timeAgo } from '@/utils/formatters';
 import { useAutoRefresh, REFRESH_INTERVALS } from '@/hooks/use-auto-refresh';
@@ -678,6 +683,16 @@ export default function StockDetailPage() {
                 <ChevronRight className="size-3.5" />
                 Peers
               </TabsTrigger>
+              <TabsTrigger value="sectormodels" className="gap-1.5 text-xs sm:text-sm px-3 py-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                <Building2 className="size-3.5" />
+                <span className="hidden sm:inline">Sector Models</span>
+                <span className="sm:hidden">Sectors</span>
+              </TabsTrigger>
+              <TabsTrigger value="audit" className="gap-1.5 text-xs sm:text-sm px-3 py-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                <FileSearch className="size-3.5" />
+                <span className="hidden sm:inline">Audit Trail</span>
+                <span className="sm:hidden">Audit</span>
+              </TabsTrigger>
             </TabsList>
           </div>
 
@@ -765,6 +780,16 @@ export default function StockDetailPage() {
                   <p className="text-xs text-muted-foreground">Key metrics across valuation, profitability, growth, and financial health</p>
                   <RatioDashboard data={data.fundamentals} />
                 </div>
+
+                {/* Confidence & Data Quality */}
+                <div className="space-y-3">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Gauge className="size-4 text-muted-foreground" />
+                    Valuation Confidence & Data Quality
+                  </h2>
+                  <p className="text-xs text-muted-foreground">Assessment of data reliability, reporting quality, and forecast certainty</p>
+                  <ConfidenceScorePanel symbol={symbol} />
+                </div>
               </motion.div>
             </AnimatePresence>
           </TabsContent>
@@ -824,6 +849,46 @@ export default function StockDetailPage() {
                     AI-powered equity research with fundamental analysis, valuation commentary, and investment thesis
                   </p>
                   <ResearchReport symbol={symbol} />
+                </div>
+              </motion.div>
+            </AnimatePresence>
+          </TabsContent>
+
+          {/* ────────────────────────────────────────────────────── */}
+          {/* Tab 7: Sector-Specific Models                         */}
+          {/* ────────────────────────────────────────────────────── */}
+          <TabsContent value="sectormodels" className="mt-0">
+            <AnimatePresence mode="wait">
+              <motion.div key="sectormodels" variants={tabVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.3 }} className="space-y-6">
+                <div className="space-y-3">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Building2 className="size-4 text-muted-foreground" />
+                    Sector-Specific Valuation Models
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Models automatically selected and weighted based on sector classification — Banks use P/B + ROE, Real Estate uses NAV, etc.
+                  </p>
+                  <SectorModelsPanel symbol={symbol} />
+                </div>
+              </motion.div>
+            </AnimatePresence>
+          </TabsContent>
+
+          {/* ────────────────────────────────────────────────────── */}
+          {/* Tab 8: Audit Trail                                   */}
+          {/* ────────────────────────────────────────────────────── */}
+          <TabsContent value="audit" className="mt-0">
+            <AnimatePresence mode="wait">
+              <motion.div key="audit" variants={tabVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.3 }} className="space-y-6">
+                <div className="space-y-3">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <FileSearch className="size-4 text-muted-foreground" />
+                    Auditable Calculations & Assumptions
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Every input, assumption, formula, and intermediate calculation is fully transparent — no black-box valuation
+                  </p>
+                  <AuditTrailPanel symbol={symbol} />
                 </div>
               </motion.div>
             </AnimatePresence>

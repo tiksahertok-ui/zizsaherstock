@@ -25,6 +25,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   ChevronRight,
+  Shield,
 } from 'lucide-react';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -637,8 +638,8 @@ export default function AnalysisPage() {
                       EGX Equity Research Terminal
                     </h1>
                     <p className="text-xs sm:text-sm text-blue-200/60 mt-0.5">
-                      Institutional-grade multi-model fair value analysis across
-                      260 Egyptian stocks
+                      Institutional-grade sector-specific fair value analysis with
+                      multi-source verification across 260 Egyptian stocks (EGP)
                     </p>
                   </div>
                 </div>
@@ -694,21 +695,28 @@ export default function AnalysisPage() {
                 className="text-[11px] border-white/10 text-blue-200/70 bg-white/[0.04]"
               >
                 <Zap className="size-3 mr-1 text-amber-300/60" />
-                5 Valuation Models
+                16 Valuation Models
               </Badge>
               <Badge
                 variant="outline"
                 className="text-[11px] border-white/10 text-blue-200/70 bg-white/[0.04]"
               >
-                <Radio className="size-3 mr-1 text-emerald-300/60" />
-                Real-Time Data
+                <Shield className="size-3 mr-1 text-emerald-300/60" />
+                Sector-Specific Models
+              </Badge>
+              <Badge
+                variant="outline"
+                className="text-[11px] border-white/10 text-blue-200/70 bg-white/[0.04]"
+              >
+                <Radio className="size-3 mr-1 text-cyan-300/60" />
+                Multi-Source Data
               </Badge>
               <Badge
                 variant="outline"
                 className="text-[11px] border-white/10 text-blue-200/70 bg-white/[0.04]"
               >
                 <Building2 className="size-3 mr-1 text-purple-300/60" />
-                TradingView
+                EGP Only
               </Badge>
             </div>
           </div>
