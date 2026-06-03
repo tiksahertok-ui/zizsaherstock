@@ -32,6 +32,7 @@ export async function GET(request: NextRequest) {
 
     // Call AI
     let aiInsight = "Analysis unavailable";
+    let engine: "ai" | "rules" = "ai";
     try {
       const ZAI = await import('z-ai-web-dev-sdk');
       const zai = await (ZAI.default || ZAI).create();
@@ -53,11 +54,15 @@ Keep your response under 400 words. Focus on actionable insights.`
     } catch (aiErr) {
       console.error("AI insight error:", aiErr);
       aiInsight = generateFallbackInsight(f, fv, sector);
+      engine = "rules";
     }
 
     return NextResponse.json({
       symbol,
       insight: aiInsight,
+      engine,
+      generatedAt: new Date().toISOString(),
+      source: f.source || f.dataSource || "TradingView Scanner",
       fairValue: fv,
       fundamentals: {
         pe: f.pe, pb: f.pb, evEbitda: f.evEbitda,
@@ -131,13 +136,15 @@ function generateFallbackInsight(
 ): string {
   const lines: string[] = [];
 
-  lines.push(`## ${f.name} (${f.symbol}) — ${sector} Sector Analysis\n`);
+  lines.push(`## ${f.name} (${f.symbol}) - ${sector} Sector Research Brief\n`);
 
   // Valuation summary
   if (fv.status !== 'N/A') {
     const verdict = fv.status === 'Undervalued' ? 'appears undervalued' :
       fv.status === 'Overvalued' ? 'appears overvalued' : 'is fairly valued';
     lines.push(`**Valuation:** ${f.symbol} ${verdict} at ${f.price} EGP, with a calculated fair value of ${fv.weightedFairValue.toFixed(2)} EGP (${fv.weightedUpside > 0 ? '+' : ''}${fv.weightedUpside.toFixed(1)}% ${fv.weightedUpside > 0 ? 'upside' : 'downside'}). ${fv.activeModels} of 4 valuation models were used (${fv.confidence} confidence).\n`);
+  } else {
+    lines.push(`**Valuation:** Composite valuation is unavailable because the live source did not provide enough required model inputs.\n`);
   }
 
   // Profitability
@@ -156,8 +163,8 @@ function generateFallbackInsight(
     lines.push(`**Financial Health:** D/E ratio of ${f.debtEquity.toFixed(2)} ${f.debtEquity > 2 ? 'is elevated, suggesting higher financial risk.' : 'is within acceptable range.'} ${f.dividendYield > 0 ? `Dividend yield of ${f.dividendYield.toFixed(1)}% provides income to shareholders.` : ''}\n`);
   }
 
-  lines.push(`**Data Quality:** ${fv.dataQuality || 0}/100 — ${fv.activeModels} valuation models active.\n`);
-  lines.push(`*Analysis based on TradingView fundamental data. Not financial advice.*`);
+  lines.push(`**Data Quality:** ${fv.dataQuality || 0}/100 - ${fv.activeModels} valuation models active. Source: ${f.source || f.dataSource || 'TradingView Scanner'}.\n`);
+  lines.push(`*Rules-based brief generated from fetched fundamentals and valuation outputs. Not financial advice.*`);
 
   return lines.join('\n');
 }
