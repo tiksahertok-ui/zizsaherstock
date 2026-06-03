@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchFundamentals, filterEGPOnly } from "@/lib/fundamentals";
-import { calculateFairValue } from "@/lib/fair-value-engine";
+import { calculateFairValueV3 } from "@/lib/fair-value-engine-v3";
 import { EGX_STOCKS } from "@/lib/egx-stocks";
 import { computeSectorAverages } from "@/lib/egx-sectors";
 
 /**
- * GET /api/analysis/screener?sector=...&status=...&sort=...&limit=...&minPrice=...&maxPrice=...&minMarketCap=...&maxMarketCap=...&minPE=...&maxPE=...&minROE=...&maxDebtEquity=...&minDividendYield=...&minRevenueGrowth=...&minUpside=...&maxUpside=...&minQuality=...&market_breadth=true
- * Returns fair value analysis for EGX stocks with filtering & sorting.
+ * GET /api/analysis/screener?sector=...&status=...&sort=...&limit=...&minPrice=...&maxPrice=...&minMarketCap=...&maxMarketCap=...&minPE=...&maxPE=...&minROE=...&maxDebtEquity=...&minDividendYield=...&minRevenueGrowth=...&minUpside=...&maxUpside=...&minQuality=...&market_breadth=true&includeAuditTrail=true
+ *
+ * Returns V3 fair value analysis for EGX stocks with filtering, sorting,
+ * sector-specific model results, confidence scoring, transparent assumptions,
+ * and optional audit trail.
+ *
  * Cache: 120s
  */
 export async function GET(request: NextRequest) {
@@ -17,6 +21,7 @@ export async function GET(request: NextRequest) {
     const sort = searchParams.get("sort") || "upside";
     const minQuality = parseInt(searchParams.get("minQuality") || "0");
     const limit = Math.min(260, parseInt(searchParams.get("limit") || "260"));
+    const includeAuditTrail = searchParams.get("includeAuditTrail") === "true";
 
     // Text search (symbol or name)
     const search = (searchParams.get("search") || "").trim().toUpperCase();
@@ -59,7 +64,7 @@ export async function GET(request: NextRequest) {
     const totalStocksBeforeEGP = Object.keys(rawFundData).length;
     const { filtered: egpFiltered, removedCount, removedSymbols } = filterEGPOnly(rawFundData);
     if (removedCount > 0) {
-      console.log(`[Screener] Removed ${removedCount} non-EGP stock(s): ${removedSymbols.join(', ')}`);
+      console.log(`[Screener V3] Removed ${removedCount} non-EGP stock(s): ${removedSymbols.join(', ')}`);
     }
     const fundData = egpFiltered;
 
@@ -76,13 +81,19 @@ export async function GET(request: NextRequest) {
     }
     const sectorBenchmarks = computeSectorAverages(enrichedFundData as Parameters<typeof computeSectorAverages>[0]);
 
-    // Calculate fair value for each stock (include fundamental fields needed for filters)
+    // Calculate V3 fair value for each stock
     const results = stocks
       .filter(s => fundData[s.symbol]?.hasData)
       .map(s => {
         const f = fundData[s.symbol];
+        const v3Result = calculateFairValueV3(f, s.sector, {
+          sectorBenchmarks,
+          includeAuditTrail,
+        });
+
         return {
-          ...calculateFairValue(f, s.sector, sectorBenchmarks),
+          ...v3Result,
+          // Fundamental fields needed for filters
           marketCap: f.marketCap,
           pe: f.pe,
           roe: f.roe,
@@ -93,20 +104,32 @@ export async function GET(request: NextRequest) {
           revenueGrowth: f.revenueGrowth,
           change: f.change,
           // Data quality & validation info
-          dataQuality: f.dataQualityScore,
           isEGP: f.isEGP,
           currency: f.currency,
         };
       })
-      .filter(r => r.weightedFairValue > 0 && r.activeModels > 0);
+      .filter(r => {
+        // Accept V3 fair value if positive, otherwise fall back to V2 weighted
+        const hasValidV3 = r.v3FairValue > 0 && r.modelSelection.selectedModels.length > 0;
+        const hasValidV2 = r.weightedFairValue > 0 && r.activeModels > 0;
+        return hasValidV3 || hasValidV2;
+      });
 
     // Apply filters
     let filtered = results;
     if (status && status !== 'All') {
-      filtered = filtered.filter(r => r.status === status);
+      // Filter on V3 status first, fall back to V2 status
+      filtered = filtered.filter(r => {
+        const effectiveStatus = r.v3Status !== 'N/A' ? r.v3Status : r.status;
+        return effectiveStatus === status;
+      });
     }
     if (minQuality > 0) {
-      filtered = filtered.filter(r => r.dataQuality >= minQuality);
+      filtered = filtered.filter(r => {
+        // Use V3 data quality overall score, fall back to legacy dataQuality
+        const effectiveQuality = r.v3DataQuality?.overall ?? r.dataQuality;
+        return effectiveQuality >= minQuality;
+      });
     }
     // Price filters
     if (minPrice > 0) {
@@ -129,12 +152,18 @@ export async function GET(request: NextRequest) {
     if (maxPE > 0) {
       filtered = filtered.filter(r => r.pe <= maxPE);
     }
-    // Upside filters
+    // Upside filters (prefer V3 upside, fall back to V2)
     if (minUpside > 0) {
-      filtered = filtered.filter(r => r.weightedUpside >= minUpside);
+      filtered = filtered.filter(r => {
+        const effectiveUpside = r.v3Upside ?? r.weightedUpside;
+        return effectiveUpside >= minUpside;
+      });
     }
     if (maxUpside > 0) {
-      filtered = filtered.filter(r => r.weightedUpside <= maxUpside);
+      filtered = filtered.filter(r => {
+        const effectiveUpside = r.v3Upside ?? r.weightedUpside;
+        return effectiveUpside <= maxUpside;
+      });
     }
     // ROE filter
     if (minROE > 0) {
@@ -167,7 +196,11 @@ export async function GET(request: NextRequest) {
     // Sort
     switch (sort) {
       case 'upside':
-        filtered.sort((a, b) => b.weightedUpside - a.weightedUpside);
+        filtered.sort((a, b) => {
+          const aUpside = a.v3Upside ?? a.weightedUpside;
+          const bUpside = b.v3Upside ?? b.weightedUpside;
+          return bUpside - aUpside;
+        });
         break;
       case 'top_gainers':
         filtered.sort((a, b) => {
@@ -184,7 +217,11 @@ export async function GET(request: NextRequest) {
         });
         break;
       case 'quality':
-        filtered.sort((a, b) => b.dataQuality - a.dataQuality);
+        filtered.sort((a, b) => {
+          const aQ = a.v3DataQuality?.overall ?? a.dataQuality;
+          const bQ = b.v3DataQuality?.overall ?? b.dataQuality;
+          return bQ - aQ;
+        });
         break;
       case 'marketcap':
         filtered.sort((a, b) => b.marketCap - a.marketCap);
@@ -194,8 +231,12 @@ export async function GET(request: NextRequest) {
         break;
       case 'confidence':
         filtered.sort((a, b) => {
-          const confMap: Record<string, number> = { 'High': 3, 'Medium': 2, 'Low': 1 };
-          return (confMap[b.confidence] || 0) - (confMap[a.confidence] || 0);
+          const confMap: Record<string, number> = {
+            'Very High': 5, 'High': 4, 'Moderate': 3, 'Medium': 3, 'Low': 2, 'Very Low': 1,
+          };
+          const aLevel = a.valuationConfidence?.level || a.confidence;
+          const bLevel = b.valuationConfidence?.level || b.confidence;
+          return (confMap[bLevel] || 0) - (confMap[aLevel] || 0);
         });
         break;
     }
@@ -203,15 +244,141 @@ export async function GET(request: NextRequest) {
     // Apply limit
     const limited = filtered.slice(0, limit);
 
+    // Build response items with V3 enrichment
+    const responseItems = limited.map(r => {
+      const item: Record<string, unknown> = {
+        symbol: r.symbol,
+        name: r.name,
+        sector: r.sector,
+        currentPrice: r.currentPrice,
+        marketCap: r.marketCap,
+        pe: r.pe,
+        pb: r.pb,
+        roe: r.roe,
+        roa: r.roa,
+        debtEquity: r.debtEquity,
+        dividendYield: r.dividendYield,
+        revenueGrowth: r.revenueGrowth,
+        change: r.change,
+
+        // V2 fields (backward compatible)
+        weightedFairValue: r.weightedFairValue,
+        weightedUpside: r.weightedUpside,
+        status: r.status,
+        confidence: r.confidence,
+        activeModels: r.activeModels,
+        totalModels: r.totalModels,
+        modelWeights: r.modelWeights,
+        modelWarnings: r.modelWarnings,
+        dataQuality: r.dataQuality,
+        dataSource: r.dataSource,
+        dataFetchedAt: r.dataFetchedAt,
+        missingFields: r.missingFields,
+        bullishTarget: r.bullishTarget,
+        baseTarget: r.baseTarget,
+        bearishTarget: r.bearishTarget,
+        riskScore: r.riskScore,
+        marginOfSafety: r.marginOfSafety,
+
+        // V2 advanced models
+        multiStageDCF: r.multiStageDCF,
+        monteCarlo: r.monteCarlo,
+        liquidation: r.liquidation,
+        scenarioAnalysis: r.scenarioAnalysis,
+        multiStageDDM: r.multiStageDDM,
+
+        // V1 individual models
+        dcf: r.dcf,
+        relative: r.relative,
+        ddm: r.ddm,
+        asset: r.asset,
+
+        // V3 fields
+        v3FairValue: r.v3FairValue,
+        v3Upside: r.v3Upside,
+        v3Status: r.v3Status,
+
+        // Valuation confidence (V3)
+        valuationConfidence: r.valuationConfidence ? {
+          level: r.valuationConfidence.level,
+          score: r.valuationConfidence.score,
+          factors: r.valuationConfidence.factors,
+          explanation: r.valuationConfidence.explanation,
+        } : undefined,
+
+        // Data quality (V3 enhanced)
+        dataQualityV3: r.v3DataQuality ? {
+          overall: r.v3DataQuality.overall,
+          grade: r.v3DataQuality.grade,
+          completeness: r.v3DataQuality.completeness,
+          consistency: r.v3DataQuality.consistency,
+          timeliness: r.v3DataQuality.timeliness,
+          accuracy: r.v3DataQuality.accuracy,
+        } : undefined,
+
+        // Model selection (which models were used and their weights)
+        modelSelection: r.modelSelection ? {
+          selectedModels: r.modelSelection.selectedModels,
+          weights: r.modelSelection.weights,
+          reason: r.modelSelection.reason,
+          sectorProfile: r.modelSelection.sectorProfile,
+        } : undefined,
+
+        // Sector-specific model results
+        sectorSpecificModels: r.sectorSpecificModels || [],
+
+        // Transparent assumptions
+        transparentAssumptions: r.transparentAssumptions || undefined,
+
+        // WACC details
+        waccDetails: r.waccDetails ? {
+          wacc: r.waccDetails.wacc,
+          costOfEquity: r.waccDetails.costOfEquity,
+          costOfDebt: r.waccDetails.costOfDebt,
+          riskFreeRate: r.waccDetails.riskFreeRate,
+          beta: r.waccDetails.beta,
+          equityRiskPremium: r.waccDetails.equityRiskPremium,
+          sizePremium: r.waccDetails.sizePremium,
+          countryRiskPremium: r.waccDetails.countryRiskPremium,
+          assumptions: r.waccDetails.assumptions,
+        } : undefined,
+
+        // Metadata
+        calculatedAt: r.calculatedAt,
+        isEGP: r.isEGP,
+        currency: r.currency,
+      };
+
+      // Conditionally include audit trail
+      if (includeAuditTrail && r.auditTrail) {
+        item.auditTrail = r.auditTrail;
+      }
+
+      return item;
+    });
+
     // Summary stats
     const summary = {
       total: results.length,
-      undervalued: results.filter(r => r.status === 'Undervalued').length,
-      fairlyValued: results.filter(r => r.status === 'Fairly Valued').length,
-      overvalued: results.filter(r => r.status === 'Overvalued').length,
-      highConfidence: results.filter(r => r.confidence === 'High').length,
+      undervalued: results.filter(r => {
+        const s = r.v3Status !== 'N/A' ? r.v3Status : r.status;
+        return s === 'Undervalued';
+      }).length,
+      fairlyValued: results.filter(r => {
+        const s = r.v3Status !== 'N/A' ? r.v3Status : r.status;
+        return s === 'Fairly Valued';
+      }).length,
+      overvalued: results.filter(r => {
+        const s = r.v3Status !== 'N/A' ? r.v3Status : r.status;
+        return s === 'Overvalued';
+      }).length,
+      highConfidence: results.filter(r => {
+        const level = r.valuationConfidence?.level || r.confidence;
+        return level === 'High' || level === 'Very High';
+      }).length,
       filteredTotal: filtered.length,
       source: "TradingView Scanner",
+      engineVersion: "V3",
       generatedAt: new Date().toISOString(),
       coverageNote: "Stocks without enough real source fields for at least one valuation model are excluded from valuation-ranked results.",
     };
@@ -228,8 +395,9 @@ export async function GET(request: NextRequest) {
         const entry = sectorMap.get(s)!;
         entry.count++;
         entry.avgChange += fundData[r.symbol]?.change || 0;
-        if (r.status === 'Undervalued') entry.undervalued++;
-        if (r.status === 'Overvalued') entry.overvalued++;
+        const effectiveStatus = r.v3Status !== 'N/A' ? r.v3Status : r.status;
+        if (effectiveStatus === 'Undervalued') entry.undervalued++;
+        if (effectiveStatus === 'Overvalued') entry.overvalued++;
         entry.totalMcap += r.marketCap;
       }
       breadthData = {};
@@ -249,7 +417,7 @@ export async function GET(request: NextRequest) {
     // Data validation summary
     const egpStocksCount = results.length;
     const avgDataQuality = egpStocksCount > 0
-      ? Math.round(results.reduce((sum, r) => sum + r.dataQuality, 0) / egpStocksCount)
+      ? Math.round(results.reduce((sum, r) => sum + (r.v3DataQuality?.overall ?? r.dataQuality), 0) / egpStocksCount)
       : 0;
 
     const dataValidation = {
@@ -258,13 +426,15 @@ export async function GET(request: NextRequest) {
       nonEgpRemoved: removedCount,
       avgDataQuality,
       dataSource: "tradingview+validation" as const,
+      engineVersion: "V3",
     };
 
-    return NextResponse.json({ results: limited, summary, marketBreadth: breadthData, dataValidation }, {
-      headers: { "Cache-Control": "public, max-age=120, stale-while-revalidate=30" },
-    });
+    return NextResponse.json(
+      { results: responseItems, summary, marketBreadth: breadthData, dataValidation },
+      { headers: { "Cache-Control": "public, max-age=120, stale-while-revalidate=30" } },
+    );
   } catch (error) {
-    console.error("Screener error:", error);
+    console.error("Screener V3 error:", error);
     return NextResponse.json({ error: "Failed to run screener" }, { status: 503 });
   }
 }
