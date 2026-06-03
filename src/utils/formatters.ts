@@ -27,6 +27,32 @@ export function fmtPercent(value: number): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+/** Safe formatters — return "—" for null/undefined/unavailable data (Rule: never show 0 for missing) */
+export function fmtCurrencySafe(value: number | null | undefined): string {
+  if (value == null || !isFinite(value)) return '—';
+  return fmtCurrency(value);
+}
+
+export function fmtPercentSafe(value: number | null | undefined): string {
+  if (value == null || !isFinite(value)) return '—';
+  return fmtPercent(value);
+}
+
+export function fmtNumberSafe(value: number | null | undefined, decimals?: number): string {
+  if (value == null || !isFinite(value)) return '—';
+  return fmtNumber(value, decimals);
+}
+
+/** Format "Updated X ago" timestamp */
+export function timeAgo(date: Date): string {
+  const now = Date.now();
+  const diff = Math.floor((now - date.getTime()) / 1000);
+  if (diff < 5) return 'just now';
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  return `${Math.floor(diff / 3600)}h ago`;
+}
+
 /** Format a currency change with sign prefix */
 export function fmtChange(value: number): string {
   const sign = value >= 0 ? '+' : '';

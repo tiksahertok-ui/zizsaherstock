@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   BarChart3, TrendingUp, TrendingDown, LayoutDashboard, Search,
@@ -19,7 +19,7 @@ import MarketOverviewStats from '@/components/analysis/market-overview-stats';
 import SectorOverview from '@/components/analysis/sector-overview';
 import WatchlistPanel from '@/components/analysis/watchlist-panel';
 
-import { fmtCurrency, fmtPercent, pnlColor } from '@/utils/formatters';
+import { fmtCurrency, fmtPercent, pnlColor, timeAgo } from '@/utils/formatters';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -65,6 +65,56 @@ export default function AnalysisPage() {
   const [opLoading, setOpLoading] = useState(true);
   const [screenerSector, setScreenerSector] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+  const [updateTick, setUpdateTick] = useState(0);
+  const marketStatusRef = useRef<{ egx: string } | null>(null);
+
+  // Fetch market status
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch('/api/market-data/live?minimal=true', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          marketStatusRef.current = data.status || { egx: 'closed' };
+        }
+      } catch {
+        // Fallback: check Egypt time locally
+        const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' }));
+        const day = now.getDay();
+        const t = now.getHours() * 60 + now.getMinutes();
+        const egxLive = day !== 5 && day !== 6 && t >= 600 && t <= 885;
+        marketStatusRef.current = { egx: egxLive ? 'live' : 'closed' };
+      }
+    };
+    checkStatus();
+    const statusInterval = setInterval(checkStatus, 60000);
+    return () => clearInterval(statusInterval);
+  }, []);
+
+  // Auto-refresh: screener 120s during market hours
+  useEffect(() => {
+    const isMarketOpen = marketStatusRef.current?.egx === 'live';
+    if (!isMarketOpen) return;
+    const interval = setInterval(() => {
+      setRefreshKey(k => k + 1);
+      setLastUpdate(new Date());
+      setUpdateTick(t => t + 1);
+    }, 120_000);
+    return () => clearInterval(interval);
+  }, [marketStatusRef.current?.egx, updateTick]);
+
+  // Refetch on tab focus (visibilitychange)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        setRefreshKey(k => k + 1);
+        setLastUpdate(new Date());
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
 
   const fetchTopOpportunities = useCallback(async () => {
     try {
@@ -101,6 +151,7 @@ export default function AnalysisPage() {
   const handleRefreshAll = () => {
     setOpLoading(true);
     setRefreshKey(k => k + 1);
+    setLastUpdate(new Date());
   };
 
   const handleSectorClick = (sector: string) => {
@@ -148,6 +199,9 @@ export default function AnalysisPage() {
                     <RefreshCw className={`size-3.5 ${opLoading ? 'animate-spin' : ''}`} />
                     Refresh
                   </Button>
+                  <span className="text-[11px] text-muted-foreground ml-1">
+                    Updated {timeAgo(lastUpdate)}
+                  </span>
                 </div>
               </div>
             </div>

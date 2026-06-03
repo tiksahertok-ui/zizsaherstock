@@ -18,6 +18,9 @@ export async function GET(request: NextRequest) {
     const minQuality = parseInt(searchParams.get("minQuality") || "0");
     const limit = Math.min(260, parseInt(searchParams.get("limit") || "260"));
 
+    // Text search (symbol or name)
+    const search = (searchParams.get("search") || "").trim().toUpperCase();
+
     // Advanced filters
     const minPrice = parseFloat(searchParams.get("minPrice") || "0");
     const maxPrice = parseFloat(searchParams.get("maxPrice") || "0");
@@ -25,7 +28,10 @@ export async function GET(request: NextRequest) {
     const maxMarketCap = parseFloat(searchParams.get("maxMarketCap") || "0");
     const minPE = parseFloat(searchParams.get("minPE") || "0");
     const maxPE = parseFloat(searchParams.get("maxPE") || "0");
+    const minPB = parseFloat(searchParams.get("minPB") || "0");
+    const maxPB = parseFloat(searchParams.get("maxPB") || "0");
     const minROE = parseFloat(searchParams.get("minROE") || "0");
+    const minROA = parseFloat(searchParams.get("minROA") || "0");
     const maxDebtEquity = parseFloat(searchParams.get("maxDebtEquity") || "0");
     const minDividendYield = parseFloat(searchParams.get("minDividendYield") || "0");
     const minRevenueGrowth = parseFloat(searchParams.get("minRevenueGrowth") || "0");
@@ -33,10 +39,16 @@ export async function GET(request: NextRequest) {
     const maxUpside = parseFloat(searchParams.get("maxUpside") || "0");
     const marketBreadth = searchParams.get("market_breadth") === "true";
 
-    // Filter stocks by sector first
+    // Filter stocks by sector and search text first
     let stocks = [...EGX_STOCKS];
     if (sector && sector !== "All") {
       stocks = stocks.filter(s => s.sector === sector);
+    }
+    if (search) {
+      stocks = stocks.filter(s =>
+        s.symbol.toUpperCase().includes(search) ||
+        s.name.toUpperCase().includes(search)
+      );
     }
 
     // Fetch fundamentals for ALL stocks in filtered set
@@ -66,6 +78,8 @@ export async function GET(request: NextRequest) {
           marketCap: f.marketCap,
           pe: f.pe,
           roe: f.roe,
+          roa: f.roa,
+          pb: f.pb,
           debtEquity: f.debtEquity,
           dividendYield: f.dividendYield,
           revenueGrowth: f.revenueGrowth,
@@ -124,6 +138,17 @@ export async function GET(request: NextRequest) {
     // Revenue Growth filter
     if (minRevenueGrowth > 0) {
       filtered = filtered.filter(r => r.revenueGrowth >= minRevenueGrowth);
+    }
+    // PB filters
+    if (minPB > 0) {
+      filtered = filtered.filter(r => r.pb > 0 && r.pb >= minPB);
+    }
+    if (maxPB > 0) {
+      filtered = filtered.filter(r => r.pb > 0 && r.pb <= maxPB);
+    }
+    // ROA filter
+    if (minROA > 0) {
+      filtered = filtered.filter(r => r.roa >= minROA);
     }
 
     // Sort
