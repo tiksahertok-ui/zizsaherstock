@@ -97,7 +97,8 @@ export async function GET(request: NextRequest) {
           isEGP: f.isEGP,
           currency: f.currency,
         };
-      });
+      })
+      .filter(r => r.weightedFairValue > 0 && r.activeModels > 0);
 
     // Apply filters
     let filtered = results;
@@ -210,6 +211,9 @@ export async function GET(request: NextRequest) {
       overvalued: results.filter(r => r.status === 'Overvalued').length,
       highConfidence: results.filter(r => r.confidence === 'High').length,
       filteredTotal: filtered.length,
+      source: "TradingView Scanner",
+      generatedAt: new Date().toISOString(),
+      coverageNote: "Stocks without enough real source fields for at least one valuation model are excluded from valuation-ranked results.",
     };
 
     // Market breadth data if requested
