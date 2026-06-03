@@ -101,6 +101,10 @@ export interface FairValueResult {
   confidence: 'High' | 'Medium' | 'Low';
   activeModels: number;
   totalModels: number;
+  modelWarnings: string[];
+  dataSource: string;
+  dataFetchedAt: string | null;
+  missingFields: string[];
 
   // Price targets
   bullishTarget: number;
@@ -183,7 +187,7 @@ export function calculateDCF(
   // ── EGP Currency Validation ──
   if (f.currency && f.currency !== 'EGP') return null;
 
-  if (!f.eps || f.eps <= 0 || f.sharesOutstanding <= 0) return null;
+  if (f.sharesOutstanding <= 0) return null;
 
   // Get sector-specific parameters
   const profile = getSectorValuationProfile(sector || 'Other');
@@ -193,9 +197,7 @@ export function calculateDCF(
 
   // ── NOPAT Calculation ──
   // Operating Income is EBIT from TradingView
-  const operatingIncome = f.operatingIncome > 0
-    ? f.operatingIncome
-    : (f.grossProfit > 0 ? f.grossProfit * 0.70 : f.revenue > 0 ? f.revenue * f.operatingMargin / 100 : 0);
+  const operatingIncome = f.operatingIncome > 0 ? f.operatingIncome : 0;
 
   if (operatingIncome <= 0) return null;
 
@@ -221,8 +223,8 @@ export function calculateDCF(
   const fcfMargin = f.revenue > 0 ? fcf / f.revenue : dcfParams.defaultFCFMargin;
 
   // ── Growth Assumptions ──
-  const revGrowth = f.revenueGrowth > 0 ? f.revenueGrowth / 100 : dcfParams.baseGrowthRate;
-  const baseGrowthRate = Math.max(0.02, Math.min(0.35, revGrowth));
+  const revGrowth = f.revenueGrowth !== 0 ? f.revenueGrowth / 100 : dcfParams.baseGrowthRate;
+  const baseGrowthRate = Math.max(-0.25, Math.min(0.35, revGrowth));
   const terminalGrowth = dcfParams.terminalGrowthRate;
   const projectionYears = dcfParams.projectionYears;
 
@@ -250,9 +252,10 @@ export function calculateDCF(
   let currentFCFPS = fcfPerShare;
 
   for (let i = 0; i < projectionYears; i++) {
-    // Decaying growth rate (converges to terminal growth over projection period)
-    // Uses geometric interpolation: g(t) = g_base × (g_terminal / g_base)^(t/(N-1))
-    const yearGrowth = baseGrowthRate * Math.pow(terminalGrowth / baseGrowthRate, i / (projectionYears - 1));
+    // Decaying growth rate (converges to terminal growth over projection period).
+    // Linear interpolation supports reported contraction without creating invalid ratios.
+    const convergence = i / (projectionYears - 1);
+    const yearGrowth = baseGrowthRate + (terminalGrowth - baseGrowthRate) * convergence;
     currentFCFPS *= (1 + yearGrowth);
     projectedFCF.push(currentFCFPS);
   }
@@ -312,7 +315,7 @@ export function calculateRelative(
   // ── EGP Currency Validation ──
   if (f.currency && f.currency !== 'EGP') return null;
 
-  if (f.eps <= 0 && f.bvps <= 0) return null;
+  if (f.eps <= 0 && f.bvps <= 0 && f.revenuePerShare <= 0 && f.operatingIncome <= 0) return null;
 
   const bench = getSectorBenchmark(sector, benchmarks);
   const profile = getSectorValuationProfile(sector, benchmarks);
@@ -327,7 +330,7 @@ export function calculateRelative(
   // ── EV/EBITDA Fair Value: EBITDA per share × Sector Average ──
   const ebitdaPerShare = f.operatingIncome > 0 && f.sharesOutstanding > 0
     ? f.operatingIncome / f.sharesOutstanding
-    : f.eps * 3; // Rough approximation: EBITDA ≈ 3× EPS
+    : 0;
   const evEbitdaFairValue = ebitdaPerShare > 0 ? ebitdaPerShare * bench.avgEV_EBITDA : 0;
 
   // ── P/S Fair Value: Revenue per share × Sector Average P/S ──
@@ -399,7 +402,7 @@ export function calculateDDM(
   const requiredReturn = EGYPT_MARKET_AVG.riskFreeRate + beta * waccParams.equityRiskPremium + waccParams.sizePremium;
 
   // Dividend per share
-  const dps = f.dps > 0 ? f.dps : f.eps * (f.payoutRatio / 100);
+  const dps = f.dps > 0 ? f.dps : f.payoutRatio > 0 ? f.eps * (f.payoutRatio / 100) : 0;
   if (dps <= 0) return null;
 
   // Growth rate: sustainable growth = ROE × retention ratio
@@ -545,6 +548,7 @@ export function calculateFairValue(
   const relative = isNonEGP ? null : calculateRelative(f, sector, sectorBenchmarks);
   const ddm = isNonEGP ? null : calculateDDM(f, sector);
   const asset = isNonEGP ? null : calculateAssetBased(f, sector);
+  const modelWarnings = getModelWarnings(f, { dcf: !!dcf, relative: !!relative, ddm: !!ddm, asset: !!asset });
 
   // Data quality
   const dataQuality = getDataQuality(f);
@@ -600,11 +604,40 @@ export function calculateFairValue(
     confidence,
     activeModels,
     totalModels: 4,
+    modelWarnings,
+    dataSource: f.source || f.dataSource || 'TradingView Scanner',
+    dataFetchedAt: f.fetchedAt || f.validatedAt || null,
+    missingFields: f.missingFields || [],
     bullishTarget,
     baseTarget,
     bearishTarget,
     calculatedAt: new Date().toISOString(),
   };
+}
+
+function getModelWarnings(
+  f: FundamentalData,
+  active: { dcf: boolean; relative: boolean; ddm: boolean; asset: boolean }
+): string[] {
+  const warnings: string[] = [];
+
+  if (!active.dcf) {
+    warnings.push("DCF unavailable: requires operating income, positive FCF after reinvestment, and shares outstanding.");
+  }
+  if (!active.relative) {
+    warnings.push("Relative valuation unavailable: requires at least one real per-share earnings, book, revenue, or operating-income input.");
+  }
+  if (!active.ddm) {
+    warnings.push("DDM unavailable: requires dividend yield, EPS, and dividend-per-share or payout-ratio data.");
+  }
+  if (!active.asset) {
+    warnings.push("Asset valuation unavailable: requires book value per share.");
+  }
+  if (f.missingFields?.length) {
+    warnings.push(`Missing source fields: ${f.missingFields.slice(0, 8).join(", ")}${f.missingFields.length > 8 ? ", ..." : ""}.`);
+  }
+
+  return warnings;
 }
 
 // ── Data Quality Assessment ──────────────────────────────────────
