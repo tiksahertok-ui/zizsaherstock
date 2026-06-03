@@ -155,6 +155,9 @@ export interface FundamentalData {
   dataSource: DataSource;
   dataQualityScore: number;
   validatedAt: string | null;
+  source: "TradingView Scanner";
+  fetchedAt: string;
+  missingFields: string[];
 }
 
 // ── Utility ──────────────────────────────────────────────────────
@@ -236,6 +239,29 @@ export async function fetchFundamentals(
         const totalLiabilities = get("total_liabilities");
         const stockholdersEquity = get("stockholders_equity");
 
+        const fetchedAt = new Date().toISOString();
+        const missingFields = [
+          ["price", get("close")],
+          ["marketCap", get("market_cap_basic")],
+          ["pe", pe],
+          ["pb", get("price_book_fq")],
+          ["eps", get("earnings_per_share_basic_ttm")],
+          ["bvps", get("book_value_per_share_fq")],
+          ["revenue", revenue],
+          ["netIncome", netIncome],
+          ["operatingIncome", get("operating_income")],
+          ["grossMargin", grossMargin],
+          ["operatingMargin", operatingMargin],
+          ["roe", roe],
+          ["totalAssets", totalAssets],
+          ["stockholdersEquity", stockholdersEquity],
+          ["freeCashFlow", freeCashFlow],
+          ["operatingCashFlow", operatingCashFlow],
+          ["sharesOutstanding", get("total_shares_outstanding_fq")],
+        ]
+          .filter(([, value]) => Number(value) === 0)
+          .map(([field]) => String(field));
+
         // Currency validation
         const currency = getStr("currency", "EGP").toUpperCase();
         const isEGP = currency === "EGP" || currency.includes("EGP");
@@ -316,6 +342,9 @@ export async function fetchFundamentals(
           dataSource: 'tradingview' as DataSource,
           dataQualityScore: 0,
           validatedAt: null,
+          source: "TradingView Scanner",
+          fetchedAt,
+          missingFields,
         };
 
         // Compute and assign quality score
