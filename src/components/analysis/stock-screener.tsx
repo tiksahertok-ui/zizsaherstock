@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowUpDown, ArrowUp, ArrowDown, Filter, TrendingUp,
-  TrendingDown, Minus, ChevronRight, X, RotateCcw, SlidersHorizontal, Star, RefreshCw,
+  TrendingDown, Minus, ChevronRight, X, RotateCcw, SlidersHorizontal, Star, RefreshCw, Search,
 } from 'lucide-react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -60,6 +60,7 @@ const SORT_OPTIONS: Array<{ label: string; value: string }> = [
 ];
 
 interface FilterState {
+  search: string;
   sector: string;
   status: string;
   minQuality: number;
@@ -71,7 +72,10 @@ interface FilterState {
   maxMarketCap: string;
   minPE: string;
   maxPE: string;
+  minPB: string;
+  maxPB: string;
   minROE: string;
+  minROA: string;
   maxDebtEquity: string;
   minDividendYield: string;
   minRevenueGrowth: string;
@@ -81,6 +85,7 @@ interface FilterState {
 }
 
 const defaultFilters: FilterState = {
+  search: '',
   sector: 'All',
   status: 'All',
   minQuality: 0,
@@ -92,7 +97,10 @@ const defaultFilters: FilterState = {
   maxMarketCap: '',
   minPE: '',
   maxPE: '',
+  minPB: '',
+  maxPB: '',
   minROE: '',
+  minROA: '',
   maxDebtEquity: '',
   minDividendYield: '',
   minRevenueGrowth: '',
@@ -206,6 +214,7 @@ export default function StockScreener({ defaultSector }: ScreenerProps) {
     setError(null);
     try {
       const params = new URLSearchParams();
+      if (filters.search) params.set('search', filters.search);
       if (filters.sector && filters.sector !== 'All') params.set('sector', filters.sector);
       if (filters.status && filters.status !== 'All') params.set('status', filters.status);
       if (filters.minQuality > 0) params.set('minQuality', String(filters.minQuality));
@@ -217,7 +226,10 @@ export default function StockScreener({ defaultSector }: ScreenerProps) {
       if (filters.maxMarketCap) params.set('maxMarketCap', filters.maxMarketCap);
       if (filters.minPE) params.set('minPE', filters.minPE);
       if (filters.maxPE) params.set('maxPE', filters.maxPE);
+      if (filters.minPB) params.set('minPB', filters.minPB);
+      if (filters.maxPB) params.set('maxPB', filters.maxPB);
       if (filters.minROE) params.set('minROE', filters.minROE);
+      if (filters.minROA) params.set('minROA', filters.minROA);
       if (filters.maxDebtEquity) params.set('maxDebtEquity', filters.maxDebtEquity);
       if (filters.minDividendYield) params.set('minDividendYield', filters.minDividendYield);
       if (filters.minRevenueGrowth) params.set('minRevenueGrowth', filters.minRevenueGrowth);
@@ -269,15 +281,35 @@ export default function StockScreener({ defaultSector }: ScreenerProps) {
 
   const resetFilters = () => setFilters(defaultFilters);
 
-  const hasActiveFilters = filters.sector !== 'All' || filters.status !== 'All' || filters.minQuality > 0 ||
+  const hasActiveFilters = filters.search || filters.sector !== 'All' || filters.status !== 'All' || filters.minQuality > 0 ||
     filters.minPrice || filters.maxPrice || filters.minMarketCap || filters.maxMarketCap ||
-    filters.minPE || filters.maxPE || filters.minROE || filters.maxDebtEquity ||
+    filters.minPE || filters.maxPE || filters.minPB || filters.maxPB ||
+    filters.minROE || filters.minROA || filters.maxDebtEquity ||
     filters.minDividendYield || filters.minRevenueGrowth || filters.minUpside || filters.maxUpside;
 
   return (
     <div className="space-y-4">
       {/* Filter Controls Row 1: Main Filters */}
       <div className="flex flex-wrap items-end gap-3">
+        {/* Search Bar */}
+        <div className="relative min-w-[200px]">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder="Search symbol or name..."
+            className="h-8 text-xs pl-8 pr-8"
+            value={filters.search}
+            onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+          />
+          {filters.search && (
+            <button
+              className="absolute right-2 top-1/2 -translate-y-1/2"
+              onClick={() => setFilters(f => ({ ...f, search: '' }))}
+            >
+              <X className="size-3 text-muted-foreground hover:text-foreground" />
+            </button>
+          )}
+        </div>
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground font-medium">Sector</label>
           <Select value={filters.sector} onValueChange={v => setFilters(f => ({ ...f, sector: v }))}>
@@ -472,6 +504,37 @@ export default function StockScreener({ defaultSector }: ScreenerProps) {
                     className="h-8 text-xs"
                     value={filters.minRevenueGrowth}
                     onChange={e => setFilters(f => ({ ...f, minRevenueGrowth: e.target.value }))}
+                  />
+                </div>
+                {/* P/B Range */}
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground font-medium">P/B Range</label>
+                  <div className="flex gap-1">
+                    <Input
+                      type="number"
+                      placeholder="Min"
+                      className="h-8 text-xs"
+                      value={filters.minPB}
+                      onChange={e => setFilters(f => ({ ...f, minPB: e.target.value }))}
+                    />
+                    <Input
+                      type="number"
+                      placeholder="Max"
+                      className="h-8 text-xs"
+                      value={filters.maxPB}
+                      onChange={e => setFilters(f => ({ ...f, maxPB: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                {/* Min ROA */}
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground font-medium">Min ROA (%)</label>
+                  <Input
+                    type="number"
+                    placeholder="0"
+                    className="h-8 text-xs"
+                    value={filters.minROA}
+                    onChange={e => setFilters(f => ({ ...f, minROA: e.target.value }))}
                   />
                 </div>
                 {/* Min Upside */}
