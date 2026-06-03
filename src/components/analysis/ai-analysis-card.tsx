@@ -16,6 +16,9 @@ interface AIAnalysisCardProps {
 interface AIInsightResponse {
   symbol: string;
   insight: string;
+  engine?: 'ai' | 'rules';
+  source?: string;
+  generatedAt?: string;
   fairValue?: {
     weightedFairValue: number;
     weightedUpside: number;
@@ -177,6 +180,7 @@ function AISkeleton() {
 
 export default function AIAnalysisCard({ symbol }: AIAnalysisCardProps) {
   const [insight, setInsight] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{ engine?: 'ai' | 'rules'; source?: string; generatedAt?: string }>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -190,6 +194,7 @@ export default function AIAnalysisCard({ symbol }: AIAnalysisCardProps) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AIInsightResponse = await res.json();
       setInsight(data.insight || null);
+      setMeta({ engine: data.engine, source: data.source, generatedAt: data.generatedAt });
     } catch (err) {
       console.error('AI insight fetch error:', err);
       setError('Failed to generate AI analysis');
@@ -242,11 +247,17 @@ export default function AIAnalysisCard({ symbol }: AIAnalysisCardProps) {
           </div>
           <span>AI Analysis</span>
           <span className="text-[10px] text-muted-foreground font-normal ml-auto">
-            Powered by AI
+            {meta.engine === 'rules' ? 'Rules-based fallback' : 'Powered by AI'}
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="px-4 pt-3">
+        {(meta.source || meta.generatedAt) && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+            {meta.source && <span>Source: {meta.source}</span>}
+            {meta.generatedAt && <span>Generated: {new Date(meta.generatedAt).toLocaleString()}</span>}
+          </div>
+        )}
         <div className="prose-sm max-w-none text-muted-foreground">
           {renderMarkdown(insight)}
         </div>
