@@ -188,14 +188,14 @@ function KeyMetricsCard({ data, fairValue }: { data: FundamentalData | null; fai
   const metrics = useMemo(() => {
     if (!data && !fairValue) return [];
     return [
-      { label: 'P/E Ratio', value: data?.pe ? fmtNumber(data.pe, 1) : '—', good: data?.pe > 0 && data.pe < 20 },
-      { label: 'P/B Ratio', value: data?.pb ? fmtNumber(data.pb, 2) : '—', good: data?.pb > 0 && data.pb < 3 },
+      { label: 'P/E Ratio', value: data?.pe ? fmtNumber(data.pe, 1) : '—', good: data?.pe != null && data.pe > 0 && data.pe < 20 },
+      { label: 'P/B Ratio', value: data?.pb ? fmtNumber(data.pb, 2) : '—', good: data?.pb != null && data.pb > 0 && data.pb < 3 },
       { label: 'EPS', value: data?.eps ? fmtCurrency(data.eps) : '—', good: data ? data.eps > 0 : false },
-      { label: 'Div. Yield', value: data?.dividendYield > 0 ? `${data.dividendYield.toFixed(1)}%` : '—', good: data ? data.dividendYield >= 3 : false },
-      { label: 'ROE', value: data?.roe > 0 ? `${data.roe.toFixed(1)}%` : '—', good: data ? data.roe >= 15 : false },
-      { label: 'Volume', value: data?.volume > 0 ? `${(data.volume / 1e6).toFixed(1)}M` : '—', good: false },
-      { label: '52W Low', value: data?.week52Low > 0 ? fmtCurrency(data.week52Low) : '—', good: false },
-      { label: '52W High', value: data?.week52High > 0 ? fmtCurrency(data.week52High) : '—', good: false },
+      { label: 'Div. Yield', value: data?.dividendYield != null && data.dividendYield > 0 ? `${data.dividendYield.toFixed(1)}%` : '—', good: data ? data.dividendYield >= 3 : false },
+      { label: 'ROE', value: data?.roe != null && data.roe > 0 ? `${data.roe.toFixed(1)}%` : '—', good: data ? data.roe >= 15 : false },
+      { label: 'Volume', value: data?.volume != null && data.volume > 0 ? `${(data.volume / 1e6).toFixed(1)}M` : '—', good: false },
+      { label: '52W Low', value: data?.week52Low != null && data.week52Low > 0 ? fmtCurrency(data.week52Low) : '—', good: false },
+      { label: '52W High', value: data?.week52High != null && data.week52High > 0 ? fmtCurrency(data.week52High) : '—', good: false },
     ];
   }, [data, fairValue]);
 
@@ -227,7 +227,7 @@ function KeyMetricsCard({ data, fairValue }: { data: FundamentalData | null; fai
             </div>
           ))}
           {/* 52W Range Bar */}
-          {data?.week52Low > 0 && data.week52High > 0 && price > 0 && (
+          {data?.week52Low != null && data.week52Low > 0 && data.week52High != null && data.week52High > 0 && price > 0 && (
             <div className="pt-3">
               <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
                 <span>{fmtCurrency(data.week52Low)}</span>
