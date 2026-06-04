@@ -12,17 +12,18 @@ import {
   TrendingDown,
   Target,
   Brain,
-  BarChart3,
+ BarChart3,
   Activity,
   ChevronRight,
   Building2,
   Zap,
-  Shield,
+ Shield,
   AlertTriangle,
   Clock,
   Eye,
   FileSearch,
   Gauge,
+  Sparkles,
 } from 'lucide-react';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -44,6 +45,7 @@ import ResearchReport from '@/components/analysis/research-report';
 import SectorModelsPanel from '@/components/analysis/sector-models-panel';
 import ConfidenceScorePanel from '@/components/analysis/confidence-score-panel';
 import AuditTrailPanel from '@/components/analysis/audit-trail-panel';
+import AIFairValueCard from '@/components/analysis/ai-fair-value-card';
 
 import { fmtCurrency, fmtPercent, fmtNumber, pnlColor, timeAgo } from '@/utils/formatters';
 import { useAutoRefresh, REFRESH_INTERVALS } from '@/hooks/use-auto-refresh';
@@ -724,6 +726,18 @@ export default function StockDetailPage() {
 
                   {/* Price Targets */}
                   <PriceTargetsCard fairValue={data.fairValue} />
+                </div>
+
+                {/* AI Fair Value Analysis */}
+                <div className="space-y-3">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Sparkles className="size-4 text-primary" />
+                    AI-Powered Fair Value
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Combines V1, V2, V3 mathematical models with AI analyst assessment for institutional-grade fair value
+                  </p>
+                  <AIFairValueCard symbol={symbol} />
                 </div>
               </motion.div>
             </AnimatePresence>
