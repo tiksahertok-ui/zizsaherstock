@@ -1115,6 +1115,10 @@ export function calculateFairValueV2(
     baseTarget: v1.baseTarget,
     bearishTarget: v1.bearishTarget,
     calculatedAt: v1.calculatedAt,
+    modelWarnings: v1.modelWarnings,
+    dataSource: v1.dataSource,
+    dataFetchedAt: v1.dataFetchedAt,
+    missingFields: v1.missingFields,
 
     // V2 fields
     multiStageDCF,

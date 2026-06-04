@@ -86,7 +86,7 @@ const containerVariants = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.4, ease: 'easeOut' },
+    transition: { duration: 0.4, ease: 'easeOut' as const },
   },
 };
 
@@ -578,7 +578,7 @@ export default function AIFairValueCard({ symbol }: AIFairValueCardProps) {
                 {/* ── Timestamp ── */}
                 <div className="flex items-center justify-between pt-1">
                   <span className="text-[10px] text-muted-foreground">
-                    {activeModels.length} models active | {dataQuality.grade} data quality
+                    {mathematicalFairValue.activeModels.length} models active | {dataQuality.grade} data quality
                   </span>
                   <span className="text-[10px] text-muted-foreground">
                     Generated {generatedAt ? new Date(generatedAt).toLocaleTimeString() : 'N/A'}

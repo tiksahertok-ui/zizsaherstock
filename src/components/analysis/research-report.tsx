@@ -127,10 +127,10 @@ function renderInline(text: string): React.ReactNode[] {
 
 function renderTable(rows: string[]): React.ReactNode {
   const parsedRows = rows
-    .map((row) => row.match(TABLE_ROW_REGEX)?.[1])
+    .map((row) => row?.match(TABLE_ROW_REGEX)?.[1])
     .filter(Boolean)
     .map((row) =>
-      row.split('|').map((cell) => cell.trim())
+      row!.split('|').map((cell) => cell.trim())
     );
 
   if (parsedRows.length < 2) return null;
