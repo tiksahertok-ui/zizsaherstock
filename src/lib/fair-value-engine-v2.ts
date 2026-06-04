@@ -732,10 +732,15 @@ export function calculateMonteCarlo(
       pv += fcf / Math.pow(1 + sampleWACC, yr);
     }
 
-    // Terminal value
-    const lastFCF = (curRev * sampleMargin) * (1 - EGYPT_TAX_RATE) - curRev * sampleCapEx;
+    // Terminal value — project one more year at terminal growth to get FCF_{N+1}
+    // Gordon Growth Model: TV_N = FCF_{N+1} / (WACC - g)
+    const termRev = curRev * (1 + terminalGrowth);
+    const termNOPAT = (termRev * sampleMargin) * (1 - EGYPT_TAX_RATE);
+    const termCapEx = termRev * sampleCapEx;
+    const termWC = (termRev - curRev) * WC_REV_RATIO;
+    const lastFCF = termNOPAT - termCapEx - termWC;
     if (lastFCF > 0 && sampleWACC > terminalGrowth) {
-      const tv = (lastFCF * (1 + terminalGrowth)) / (sampleWACC - terminalGrowth);
+      const tv = lastFCF / (sampleWACC - terminalGrowth);
       pv += tv / Math.pow(1 + sampleWACC, totalYears);
     }
 
@@ -896,9 +901,15 @@ function runScenarioDCF(
     pv += fcf / Math.pow(1 + wacc, yr);
   }
 
-  const lastFCF = (curRev * operatingMargin) * (1 - EGYPT_TAX_RATE) - curRev * capExRatio * curRev;
+  // Terminal value — project one more year at terminal growth to get FCF_{N+1}
+  // Gordon Growth Model: TV_N = FCF_{N+1} / (WACC - g)
+  const termRev = curRev * (1 + terminalGrowth);
+  const termNOPAT = (termRev * operatingMargin) * (1 - EGYPT_TAX_RATE);
+  const termCapEx = termRev * capExRatio;
+  const termWC = (termRev - curRev) * WC_REV_RATIO;
+  const lastFCF = termNOPAT - termCapEx - termWC;
   if (lastFCF > 0 && wacc > terminalGrowth) {
-    const tv = (lastFCF * (1 + terminalGrowth)) / (wacc - terminalGrowth);
+    const tv = lastFCF / (wacc - terminalGrowth);
     pv += tv / Math.pow(1 + wacc, totalYears);
   }
 
