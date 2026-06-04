@@ -1,8 +1,60 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchFundamentals } from "@/lib/fundamentals";
-import { calculateFairValue } from "@/lib/fair-value-engine";
+import { calculateFairValue, type FairValueResult } from "@/lib/fair-value-engine";
 import { computeSectorAverages, getSectorValuationProfile } from "@/lib/egx-sectors";
 import { EGX_STOCKS } from "@/lib/egx-stocks";
+
+/**
+ * GET /api/analysis/fair-value?symbol=COMI [&ai=true]
+ * Calculates fair value using 4 models for a single stock.
+ *
+ * Uses sector-specific valuation profiles, dynamic sector benchmarks
+ * from peer data, and includes EGP currency validation with full
+ * data source / quality metadata in the response.
+ *
+ * When ?ai=true is passed, also includes AI-powered fair value analysis
+ * from the ai-fair-value endpoint.
+ */
+
+// ── AI Fair Value types (matching the ai-fair-value endpoint response) ──
+
+interface AIAnalysisSubset {
+  fairValue: number;
+  confidence: string;
+  confidenceScore: number;
+  justification: string;
+  keyFactors: string[];
+  riskFactors: string[];
+  catalysts: string[];
+  comparisonWithModels: string;
+}
+
+interface AIFairValueSubset {
+  symbol: string;
+  stockName: string;
+  sector: string;
+  currentPrice: number;
+  mathematicalFairValue: {
+    v1Weighted: number;
+    v2Weighted: number;
+    v3Weighted: number;
+    bestModel: string;
+    activeModels: string[];
+    modelBreakdown: Record<string, { value: number; weight: number }>;
+  };
+  aiAnalysis: AIAnalysisSubset | null;
+  compositeFairValue: number;
+  compositeUpside: number;
+  recommendation: "Buy" | "Hold" | "Sell";
+  dataQuality: {
+    score: number;
+    grade: string;
+    missingFields: string[];
+    warnings: string[];
+  };
+  generatedAt: string;
+  aiSource: "ai" | "mathematical_only";
+}
 
 /**
  * GET /api/analysis/fair-value?symbol=COMI
@@ -16,6 +68,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const symbol = searchParams.get("symbol")?.toUpperCase().trim();
+    const includeAI = searchParams.get("ai") === "true";
 
     if (!symbol) {
       return NextResponse.json({ error: "symbol parameter required" }, { status: 400 });
@@ -98,8 +151,28 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // ── Enriched response ──
-    return NextResponse.json({
+    // ── Optionally include AI analysis ──
+    let aiData: AIFairValueSubset | null = null;
+    if (includeAI) {
+      try {
+        // Call the ai-fair-value endpoint internally (same server)
+        const aiUrl = new URL(request.url);
+        aiUrl.searchParams.delete("ai"); // Remove ai param to avoid recursion
+        const aiResponse = await fetch(`/api/analysis/ai-fair-value?symbol=${encodeURIComponent(symbol)}`, {
+          cache: "no-store",
+        });
+
+        if (aiResponse.ok) {
+          aiData = await aiResponse.json();
+        }
+      } catch (aiErr) {
+        console.warn("AI fair value sub-request failed, continuing with mathematical-only:", aiErr);
+        warnings.push("AI analysis unavailable — showing mathematical results only");
+      }
+    }
+
+    // ── Build response ──
+    const baseResponse = {
       symbol,
       fairValue: fairValueResult,
       sectorProfile: {
@@ -116,7 +189,11 @@ export async function GET(request: NextRequest) {
         validatedAt: f.validatedAt,
         warnings,
       },
-    }, {
+    };
+
+    const response = aiData ? { ...baseResponse, aiFairValue: aiData } : baseResponse;
+
+    return NextResponse.json(response, {
       headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=60" },
     });
   } catch (error) {
