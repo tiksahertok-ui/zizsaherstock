@@ -7,49 +7,54 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id            String    @id @default(cuid())
-  name          String
-  email         String    @unique
-  password      String?
-  image         String?
-  emailVerified Boolean   @default(false)
-  provider      String    @default("email")
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  holdings      Holding[]
+model Account {
+  id        String     @id @default(cuid())
+  username  String     @unique
+  password  String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  holdings  Holding[]
+  sessions  Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([token])
+  @@index([accountId])
 }
 
 model Holding {
   id           String   @id @default(cuid())
-  symbol       String   @unique // EGX ticker symbol (e.g., "CIB", "ORWE")
-  name         String   // Full company name
-  shares       Int      // Number of shares held (positive)
-  avgCost      Float    // Weighted average cost per share (EGP)
-  purchaseDate DateTime @default(now()) // Date the position was purchased
+  symbol       String
+  name         String
+  shares       Int
+  avgCost      Float
+  purchaseDate DateTime @default(now())
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-
-  userId String?
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-
+  accountId    String
+  account      Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
   transactions Transaction[]
 
-  @@index([symbol])
-  @@index([purchaseDate])
+  @@index([accountId])
 }
 
 model Transaction {
   id        String   @id @default(cuid())
   holdingId String
-  type      String   // "BUY" or "SELL"
-  shares    Int      // Number of shares (always positive)
-  price     Float    // Price per share at execution (EGP)
-  total     Float    // Total cost/proceeds (price * shares)
-  date      DateTime // Transaction date
-  notes     String?  // Optional notes
+  type      String
+  shares    Int
+  price     Float
+  total     Float
+  date      DateTime
+  notes     String?
   createdAt DateTime @default(now())
-
   holding   Holding  @relation(fields: [holdingId], references: [id], onDelete: Cascade)
 
   @@index([holdingId])
