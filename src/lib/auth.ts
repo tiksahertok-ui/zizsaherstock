@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/db';
 import { cookies } from 'next/headers';
 
 const SESSION_COOKIE = 'egx-session';
@@ -32,7 +32,7 @@ export async function getCurrentSession() {
 
   if (!token) return null;
 
-  const session = await db.session.findUnique({
+  const session = await prisma.session.findUnique({
     where: { token },
     include: { account: true },
   });
@@ -40,7 +40,7 @@ export async function getCurrentSession() {
   if (!session || session.expiresAt < new Date()) {
     // Session expired — clean up
     if (session) {
-      await db.session.delete({ where: { id: session.id } });
+      await prisma.session.delete({ where: { id: session.id } });
     }
     return null;
   }
@@ -54,7 +54,7 @@ export async function createSession(accountId: string) {
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + SESSION_MAX_AGE_DAYS);
 
-  await db.session.create({
+  await prisma.session.create({
     data: { token, accountId, expiresAt },
   });
 
@@ -76,7 +76,7 @@ export async function deleteSession() {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
 
   if (token) {
-    await db.session.deleteMany({ where: { token } });
+    await prisma.session.deleteMany({ where: { token } });
   }
 
   cookieStore.delete(SESSION_COOKIE);
@@ -84,7 +84,7 @@ export async function deleteSession() {
 
 /** Clean up expired sessions (call periodically) */
 export async function cleanupExpiredSessions() {
-  await db.session.deleteMany({
+  await prisma.session.deleteMany({
     where: { expiresAt: { lt: new Date() } },
   });
 }

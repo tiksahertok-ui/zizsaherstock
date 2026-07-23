@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/db';
 import { getCurrentSession } from '@/lib/auth';
 
 interface RouteParams {
@@ -16,14 +16,14 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
     const { id } = await params;
 
-    const holding = await db.holding.findFirst({
+    const holding = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
     });
     if (!holding) {
       return NextResponse.json({ error: 'Holding not found' }, { status: 404 });
     }
 
-    const transactions = await db.transaction.findMany({
+    const transactions = await prisma.transaction.findMany({
       where: { holdingId: id },
       orderBy: { date: 'desc' },
     });
@@ -59,7 +59,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Invalid transaction data' }, { status: 400 });
     }
 
-    const holding = await db.holding.findFirst({
+    const holding = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
     });
     if (!holding) {
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     // Create transaction
-    const transaction = await db.transaction.create({
+    const transaction = await prisma.transaction.create({
       data: {
         holdingId: id, type, shares: intShares, price, total,
         date: txDate, notes: notes || null,
@@ -88,9 +88,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (type === 'BUY') {
       const totalShares = holding.shares + intShares;
       const newAvgCost = ((holding.shares * holding.avgCost) + total) / totalShares;
-      await db.holding.update({ where: { id }, data: { shares: totalShares, avgCost: newAvgCost } });
+      await prisma.holding.update({ where: { id }, data: { shares: totalShares, avgCost: newAvgCost } });
     } else {
-      await db.holding.update({ where: { id }, data: { shares: holding.shares - intShares } });
+      await prisma.holding.update({ where: { id }, data: { shares: holding.shares - intShares } });
     }
 
     return NextResponse.json({

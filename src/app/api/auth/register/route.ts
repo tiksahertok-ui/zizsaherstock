@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/db';
 import { hashPassword, createSession } from '@/lib/auth';
 
 export async function POST(request: Request) {
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     }
 
     // Check if username already exists
-    const existing = await db.account.findUnique({
+    const existing = await prisma.account.findUnique({
       where: { username: trimmed.toLowerCase() },
     });
 
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
 
     // Create account
     const hashedPassword = hashPassword(password);
-    const account = await db.account.create({
+    const account = await prisma.account.create({
       data: {
         username: trimmed.toLowerCase(),
         password: hashedPassword,

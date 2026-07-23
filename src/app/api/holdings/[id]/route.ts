@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/db';
 import { getCurrentSession } from '@/lib/auth';
 
 interface RouteParams {
@@ -16,7 +16,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
     const { id } = await params;
 
-    const holding = await db.holding.findFirst({
+    const holding = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
       include: { transactions: { orderBy: { date: 'desc' } } },
     });
@@ -59,7 +59,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     const { shares, avgCost, name, purchaseDate } = body;
 
     // Verify ownership
-    const existing = await db.holding.findFirst({
+    const existing = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
     });
     if (!existing) {
@@ -86,7 +86,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
     }
 
-    const holding = await db.holding.update({
+    const holding = await prisma.holding.update({
       where: { id },
       data: updateData,
     });
@@ -113,14 +113,14 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
 
     const { id } = await params;
 
-    const existing = await db.holding.findFirst({
+    const existing = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
     });
     if (!existing) {
       return NextResponse.json({ error: 'Holding not found' }, { status: 404 });
     }
 
-    await db.holding.delete({ where: { id } });
+    await prisma.holding.delete({ where: { id } });
 
     return NextResponse.json({ success: true, deleted: existing.symbol });
   } catch (err) {

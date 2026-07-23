@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/db';
 import { getCurrentSession } from '@/lib/auth';
 
 // GET /api/holdings — Return all holdings with transactions for the authenticated user
@@ -10,7 +10,7 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const holdings = await db.holding.findMany({
+    const holdings = await prisma.holding.findMany({
       where: { accountId: session.account.id },
       include: { transactions: { orderBy: { date: 'desc' } } },
       orderBy: { createdAt: 'desc' },
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
     const upperSymbol = symbol.trim().toUpperCase();
 
     // Check for duplicate
-    const existing = await db.holding.findFirst({
+    const existing = await prisma.holding.findFirst({
       where: { accountId: session.account.id, symbol: upperSymbol },
     });
     if (existing) {
@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create holding with initial transaction
-    const holding = await db.holding.create({
+    const holding = await prisma.holding.create({
       data: {
         symbol: upperSymbol,
         name: name.trim(),
