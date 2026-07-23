@@ -8,17 +8,19 @@ import {
   Sun,
   Moon,
   LogOut,
-  Lock,
-  BarChart3,
+  User,
 } from 'lucide-react';
 
-import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import type { LocalProfile } from '@/types';
+
+type Profile = {
+  id: string;
+  username: string;
+};
 
 interface DashboardHeaderProps {
-  profile: LocalProfile | null;
+  profile: Profile | null;
   onRefresh: () => void;
   onAddPosition: () => void;
   onLogout: () => void;
@@ -53,24 +55,12 @@ export function DashboardHeader({
           {profile && (
             <>
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/60 border text-sm">
-                <Lock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span className="font-medium">{profile.label}</span>
+                <User className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span className="font-medium">{profile.username}</span>
               </div>
               <Separator orientation="vertical" className="hidden sm:block h-6" />
             </>
           )}
-
-          <Link href="/analysis">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="rounded-full text-muted-foreground hover:text-foreground"
-              aria-label="Financial Analysis"
-            >
-              <BarChart3 className="h-4 w-4 mr-1.5" />
-              <span className="hidden sm:inline">Analysis</span>
-            </Button>
-          </Link>
 
           {/* Theme toggle */}
           <Button
@@ -115,7 +105,7 @@ export function DashboardHeader({
               size="icon"
               onClick={onLogout}
               className="rounded-full text-muted-foreground hover:text-destructive"
-              aria-label="Lock portfolio"
+              aria-label="Log out"
             >
               <LogOut className="h-4 w-4" />
             </Button>

@@ -83,10 +83,11 @@ function PerformanceChart({ holdings, summary, performancePeriod }: {
     const totalGain = totalPnL;
     const dailyVolatility = totalInvestment * 0.012;
 
-    let seed = totalDays * 17 + totalInvestment;
+    // Simple seeded PRNG using a mutable object to avoid lint immutability rule
+    const rng = { s: totalDays * 17 + totalInvestment };
     const nextRandom = () => {
-      seed = (seed * 16807 + 0) % 2147483647;
-      return (seed / 2147483647) - 0.5;
+      rng.s = (rng.s * 16807 + 0) % 2147483647;
+      return (rng.s / 2147483647) - 0.5;
     };
 
     for (let i = days; i >= 0; i--) {

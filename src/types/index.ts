@@ -46,11 +46,6 @@ export type StoredHolding = Holding & {
   transactions: Transaction[];
 };
 
-export interface LocalProfile {
-  id: string;
-  label: string;
-}
-
 export interface StockOption {
   symbol: string;
   name: string;
@@ -153,8 +148,8 @@ export interface ExtrasData {
     perGram21kLow: number;
     perGram24kUsd: number;
     perGram21kUsd: number;
-    changePercent: number;    // EGP gold change (from gold-price-live.com)
-    changeAbs: number;       // EGP gold absolute change
+    changePercent: number;
+    changeAbs: number;
     egpSource: string;
     karats: Record<string, GoldKaratData>;
     ounceEgp?: number;

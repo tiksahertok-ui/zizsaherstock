@@ -27,7 +27,7 @@ export function fmtPercent(value: number): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
-/** Safe formatters — return "—" for null/undefined/unavailable data (Rule: never show 0 for missing) */
+/** Safe formatters — return "—" for null/undefined/unavailable data */
 export function fmtCurrencySafe(value: number | null | undefined): string {
   if (value == null || !isFinite(value)) return '—';
   return fmtCurrency(value);
@@ -73,28 +73,13 @@ export function pnlBgColor(value: number): string {
   return 'bg-muted text-muted-foreground border-border';
 }
 
-// ── ID & Profile Helpers ───────────────────────────────────────
+// ── ID Helper ───────────────────────────────────────────────────
 
-export const ACTIVE_PROFILE_KEY = 'egx-portfolio-active-profile';
-export const PROFILE_HOLDINGS_PREFIX = 'egx-portfolio-holdings:';
-
-/** Generate a unique ID (crypto.randomUUID with fallback) */
 export function createId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-/** Get the localStorage key for a profile's holdings */
-export function getProfileStorageKey(profileId: string): string {
-  return `${PROFILE_HOLDINGS_PREFIX}${profileId}`;
-}
-
-/** Create a deterministic profile ID from name + PIN */
-export function createProfileId(label: string, pin: string): string {
-  const normalized = `${label.trim().toLowerCase()}:${pin.trim()}`;
-  return btoa(encodeURIComponent(normalized)).replace(/=+$/g, '');
 }
 
 /** Enrich a stored holding with live market quote data */
@@ -124,9 +109,6 @@ export function enrichHolding(
 }
 
 // ── Client-Side Price Change Tracking (localStorage) ──────────
-// Tracks the FIRST price of each day for gold EGP items and USD/EGP.
-// Computes daily change purely from Egyptian source prices.
-// Survives serverless cold starts and page refreshes.
 
 export const PRICE_CHANGE_PREFIX = 'egx-daily-open:';
 
@@ -141,7 +123,6 @@ export function computeDailyChange(storageKey: string, currentPrice: number): Pr
 
   const storedOpen = localStorage.getItem(storageKey);
   if (!storedOpen) {
-    // First price of the day — store it as the open reference
     localStorage.setItem(storageKey, String(currentPrice));
     return { changeAbs: 0, changePercent: 0 };
   }
@@ -156,7 +137,7 @@ export function computeDailyChange(storageKey: string, currentPrice: number): Pr
   return { changeAbs: 0, changePercent: 0 };
 }
 
-/** Clean up old localStorage entries (older than 2 days) to prevent bloat */
+/** Clean up old localStorage entries */
 export function cleanupOldDailyEntries(): void {
   const now = new Date();
   const twoDaysAgo = new Date(now);
@@ -167,7 +148,6 @@ export function cleanupOldDailyEntries(): void {
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key && key.startsWith(PRICE_CHANGE_PREFIX)) {
-      // Extract date from key: "egx-daily-open:2026-05-28:24k"
       const datePart = key.replace(PRICE_CHANGE_PREFIX, '').split(':')[0];
       if (datePart < cutoff) {
         keysToRemove.push(key);
