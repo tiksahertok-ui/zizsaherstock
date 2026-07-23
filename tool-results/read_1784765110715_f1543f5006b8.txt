@@ -1,0 +1,716 @@
+     1→'use client';
+     2→
+     3→import { useMemo, useState } from 'react';
+     4→import { format } from 'date-fns';
+     5→import { useTheme } from 'next-themes';
+     6→import {
+     7→  Area, AreaChart, BarChart, Bar, PieChart, Pie, Cell,
+     8→  LineChart as RechartsLineChart, Line,
+     9→  CartesianGrid, ResponsiveContainer, Legend,
+    10→  Tooltip as RechartsTooltip, XAxis, YAxis, ReferenceLine,
+    11→} from 'recharts';
+    12→import {
+    13→  LineChart, PieChart as PieChartIcon, BarChart3, TrendingUp, Gem,
+    14→} from 'lucide-react';
+    15→
+    16→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+    17→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+    18→
+    19→import { fmtCurrency, fmtNumber, fmtPercent, pnlColor } from '@/utils/formatters';
+    20→import { aggregateBySector } from '@/utils/stock-data';
+    21→import type { StoredHolding, StockPerformance, IndexData } from '@/types';
+    22→
+    23→// ── Color palettes ────────────────────────────────────────────
+    24→
+    25→const ALLOCATION_COLORS = [
+    26→  '#059669', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6',
+    27→  '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16',
+    28→];
+    29→
+    30→const STOCK_LINE_COLORS = [
+    31→  '#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6',
+    32→  '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16',
+    33→  '#06b6d4', '#e11d48',
+    34→];
+    35→
+    36→const INDEX_STYLES: Record<string, { color: string; strokeDash: string }> = {
+    37→  EGX30: { color: '#2563eb', strokeDash: '' },
+    38→  EGX70_EWI: { color: '#8b5cf6', strokeDash: '' },
+    39→  EGX100_EWI: { color: '#f97316', strokeDash: '8 4' },
+    40→  XAUUSD: { color: '#eab308', strokeDash: '5 3' },
+    41→};
+    42→
+    43→const PERFORMANCE_PERIODS = ['1D', '1W', '1M', '3M', '6M', 'YTD'] as const;
+    44→const BENCHMARK_PERIODS = ['1D', '1W', '1M', '3M', '6M', 'YTD'] as const;
+    45→
+    46→// ── Props ─────────────────────────────────────────────────────
+    47→
+    48→interface PortfolioChartsProps {
+    49→  holdings: StoredHolding[];
+    50→  perfData: Record<string, StockPerformance>;
+    51→  indexData: IndexData[];
+    52→}
+    53→
+    54→// ── Performance Chart ─────────────────────────────────────────
+    55→
+    56→function PerformanceChart({ holdings, summary, performancePeriod }: {
+    57→  holdings: StoredHolding[];
+    58→  summary: { totalInvestment: number; totalMarketValue: number; todaysChange: number } | null;
+    59→  performancePeriod: string;
+    60→}) {
+    61→  const chartData = useMemo(() => {
+    62→    if (holdings.length === 0) return [];
+    63→
+    64→    const totalInvestment = holdings.reduce((s, h) => s + h.costBasis, 0);
+    65→    const totalMarketValue = holdings.reduce((s, h) => s + h.marketValue, 0);
+    66→
+    67→    const earliestDate = holdings.reduce((min: Date, h) => {
+    68→      const d = new Date(h.purchaseDate);
+    69→      return d < min ? d : min;
+    70→    }, new Date(holdings[0].purchaseDate));
+    71→
+    72→    const now = new Date();
+    73→    const totalDays = Math.max(1, Math.floor((now.getTime() - earliestDate.getTime()) / (1000 * 60 * 60 * 24)));
+    74→
+    75→    const periodDaysMap: Record<string, number> = { '1D': 1, '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, 'YTD': 0 };
+    76→    const ytdDays = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / (1000 * 60 * 60 * 24));
+    77→    const periodDays = performancePeriod === 'YTD' ? ytdDays : (periodDaysMap[performancePeriod] || 30);
+    78→    const days = Math.min(periodDays, totalDays);
+    79→
+    80→    const totalPnL = totalMarketValue - totalInvestment;
+    81→    const data = [];
+    82→    let portfolioVal = totalInvestment;
+    83→    const totalGain = totalPnL;
+    84→    const dailyVolatility = totalInvestment * 0.012;
+    85→
+    86→    let seed = totalDays * 17 + totalInvestment;
+    87→    const nextRandom = () => {
+    88→      seed = (seed * 16807 + 0) % 2147483647;
+    89→      return (seed / 2147483647) - 0.5;
+    90→    };
+    91→
+    92→    for (let i = days; i >= 0; i--) {
+    93→      const date = new Date();
+    94→      date.setDate(date.getDate() - i);
+    95→      if (date.getDay() === 5 || date.getDay() === 6) continue;
+    96→
+    97→      const progress = days > 0 ? (days - i) / days : 1;
+    98→
+    99→      if (i === 0) {
+   100→        portfolioVal = totalMarketValue;
+   101→      } else if (i === days) {
+   102→        portfolioVal = totalInvestment;
+   103→      } else {
+   104→        const noise = nextRandom() * dailyVolatility;
+   105→        const trendTarget = totalInvestment + (totalGain * progress);
+   106→        const trendPull = (trendTarget - portfolioVal) * 0.15;
+   107→        portfolioVal = portfolioVal + noise + trendPull;
+   108→        if (portfolioVal < totalInvestment * 0.7) portfolioVal = totalInvestment * 0.7;
+   109→      }
+   110→
+   111→      data.push({
+   112→        date: format(date, performancePeriod === '1D' ? 'HH:mm' : 'MMM dd'),
+   113→        portfolio: Math.round(portfolioVal * 100) / 100,
+   114→      });
+   115→    }
+   116→
+   117→    return data;
+   118→  }, [holdings, summary, performancePeriod]);
+   119→
+   120→  const { isDark } = useTheme();
+   121→  const chartTheme = useMemo(() => ({
+   122→    gridStroke: isDark ? '#334155' : '#e2e8f0',
+   123→    tickFill: isDark ? '#94a3b8' : '#64748b',
+   124→    tooltipBg: isDark ? '#1e293b' : '#ffffff',
+   125→    tooltipBorder: isDark ? '#334155' : '#e2e8f0',
+   126→    tooltipText: isDark ? '#e2e8f0' : '#1e293b',
+   127→  }), [isDark]);
+   128→
+   129→  if (chartData.length === 0) {
+   130→    return (
+   131→      <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
+   132→        Add holdings to see performance
+   133→      </div>
+   134→    );
+   135→  }
+   136→
+   137→  return (
+   138→    <div className="h-72">
+   139→      <ResponsiveContainer width="100%" height="100%">
+   140→        <AreaChart data={chartData}>
+   141→          <defs>
+   142→            <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
+   143→              <stop offset="5%" stopColor="#059669" stopOpacity={0.3} />
+   144→              <stop offset="95%" stopColor="#059669" stopOpacity={0} />
+   145→            </linearGradient>
+   146→          </defs>
+   147→          <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} />
+   148→          <XAxis dataKey="date" tick={{ fontSize: 11, fill: chartTheme.tickFill }} interval="preserveStartEnd" />
+   149→          <YAxis tick={{ fontSize: 11, fill: chartTheme.tickFill }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+   150→          <RechartsTooltip
+   151→            formatter={(value: number) => [fmtCurrency(value), 'Portfolio']}
+   152→            contentStyle={{
+   153→              backgroundColor: chartTheme.tooltipBg,
+   154→              border: `1px solid ${chartTheme.tooltipBorder}`,
+   155→              borderRadius: '8px',
+   156→              fontSize: '13px',
+   157→              color: chartTheme.tooltipText,
+   158→            }}
+   159→          />
+   160→          <Area type="monotone" dataKey="portfolio" stroke="#059669" fill="url(#portfolioGrad)" strokeWidth={2} />
+   161→        </AreaChart>
+   162→      </ResponsiveContainer>
+   163→    </div>
+   164→  );
+   165→}
+   166→
+   167→// ── Allocation Charts ─────────────────────────────────────────
+   168→
+   169→function AllocationCharts({ holdings }: { holdings: StoredHolding[] }) {
+   170→  const { isDark } = useTheme();
+   171→  const chartTheme = useMemo(() => ({
+   172→    tooltipBg: isDark ? '#1e293b' : '#ffffff',
+   173→    tooltipBorder: isDark ? '#334155' : '#e2e8f0',
+   174→    tooltipText: isDark ? '#e2e8f0' : '#1e293b',
+   175→    tooltipSubtext: isDark ? '#94a3b8' : '#64748b',
+   176→  }), [isDark]);
+   177→
+   178→  const total = holdings.reduce((s, h) => s + h.marketValue, 0);
+   179→  if (total === 0) {
+   180→    return (
+   181→      <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
+   182→        Add holdings to see allocation
+   183→      </div>
+   184→    );
+   185→  }
+   186→
+   187→  // Sector aggregation using EGX_STOCKS sector data
+   188→  const sectors = aggregateBySector(holdings);
+   189→
+   190→  // Stock allocation data
+   191→  const stockAllocation = [...holdings]
+   192→    .sort((a, b) => b.marketValue - a.marketValue)
+   193→    .slice(0, 10)
+   194→    .map((h) => ({ symbol: h.symbol, value: h.marketValue, percent: (h.marketValue / total) * 100 }));
+   195→
+   196→  return (
+   197→    <div className="grid gap-4 md:grid-cols-2">
+   198→      {/* Sector Pie */}
+   199→      <Card>
+   200→        <CardHeader className="pb-2">
+   201→          <CardTitle className="text-base">Allocation by Sector</CardTitle>
+   202→          <CardDescription>Market value distribution by sector</CardDescription>
+   203→        </CardHeader>
+   204→        <CardContent>
+   205→          <div className="flex flex-col items-center gap-4">
+   206→            <div className="w-full h-[320px]">
+   207→              <ResponsiveContainer width="100%" height="100%">
+   208→                <PieChart>
+   209→                  <Pie
+   210→                    data={sectors}
+   211→                    dataKey="percent"
+   212→                    nameKey="sector"
+   213→                    cx="50%"
+   214→                    cy="50%"
+   215→                    outerRadius={75}
+   216→                    innerRadius={38}
+   217→                    paddingAngle={2}
+   218→                    label={({ name, percent }: { name: string; percent: number }) =>
+   219→                      percent >= 0.06 ? `${name}` : ''
+   220→                    }
+   221→                    labelLine={({ percent }: { percent: number }) => percent >= 0.06}
+   222→                  >
+   223→                    {sectors.map((_, index) => (
+   224→                      <Cell key={`sector-${index}`} fill={ALLOCATION_COLORS[index % ALLOCATION_COLORS.length]} />
+   225→                    ))}
+   226→                  </Pie>
+   227→                  <RechartsTooltip
+   228→                    content={({ active, payload }) => {
+   229→                      if (!active || !payload?.length) return null;
+   230→                      const d = payload[0]?.payload;
+   231→                      if (!d) return null;
+   232→                      const colorIdx = sectors.findIndex(s => s.sector === d.sector);
+   233→                      const dotColor = ALLOCATION_COLORS[colorIdx >= 0 ? colorIdx : 0];
+   234→                      return (
+   235→                        <div style={{ backgroundColor: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '10px', padding: '10px 14px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+   236→                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+   237→                            <div style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: dotColor }} />
+   238→                            <span style={{ fontWeight: 700, fontSize: 13, color: chartTheme.tooltipText }}>{d.sector}</span>
+   239→                          </div>
+   240→                          <div style={{ fontSize: 12, color: chartTheme.tooltipSubtext }}>{d.percent.toFixed(1)}% · {fmtCurrency(d.value)}</div>
+   241→                        </div>
+   242→                      );
+   243→                    }}
+   244→                  />
+   245→                </PieChart>
+   246→              </ResponsiveContainer>
+   247→            </div>
+   248→            {/* Legend */}
+   249→            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1">
+   250→              {sectors.map((s, i) => (
+   251→                <div key={s.sector} className="flex items-center gap-1.5 text-[10px]">
+   252→                  <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ALLOCATION_COLORS[i % ALLOCATION_COLORS.length] }} />
+   253→                  <span className="text-muted-foreground">{s.sector} ({s.percent.toFixed(1)}%)</span>
+   254→                </div>
+   255→              ))}
+   256→            </div>
+   257→          </div>
+   258→        </CardContent>
+   259→      </Card>
+   260→
+   261→      {/* Stock Bar */}
+   262→      <Card>
+   263→        <CardHeader className="pb-2">
+   264→          <CardTitle className="text-base">Allocation by Stock</CardTitle>
+   265→          <CardDescription>Top 10 holdings by market value</CardDescription>
+   266→        </CardHeader>
+   267→        <CardContent>
+   268→          <div className="h-[320px]">
+   269→            <ResponsiveContainer width="100%" height="100%">
+   270→              <BarChart data={stockAllocation} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
+   271→                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} horizontal={false} />
+   272→                <XAxis dataKey="symbol" tick={{ fontSize: 10, fill: chartTheme.tooltipSubtext }} interval={0} angle={-45} textAnchor="end" height={50} />
+   273→                <YAxis tick={{ fontSize: 10, fill: chartTheme.tooltipSubtext }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+   274→                <RechartsTooltip
+   275→                  content={({ active, payload }) => {
+   276→                    if (!active || !payload?.length) return null;
+   277→                    const d = payload[0]?.payload;
+   278→                    return (
+   279→                      <div style={{ backgroundColor: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', padding: '10px 14px', fontSize: '13px', color: chartTheme.tooltipText }}>
+   280→                        <div style={{ fontWeight: 700 }}>{d.symbol}</div>
+   281→                        <div style={{ fontSize: 11, color: chartTheme.tooltipSubtext }}>{d.percent.toFixed(1)}% · {fmtCurrency(d.value)}</div>
+   282→                      </div>
+   283→                    );
+   284→                  }}
+   285→                  cursor={{ fill: 'none' }}
+   286→                />
+   287→                <Bar dataKey="percent" radius={[4, 4, 0, 0]}>
+   288→                  {stockAllocation.map((_, index) => (
+   289→                    <Cell key={`stock-${index}`} fill={STOCK_LINE_COLORS[index % STOCK_LINE_COLORS.length]} />
+   290→                  ))}
+   291→                </Bar>
+   292→              </BarChart>
+   293→            </ResponsiveContainer>
+   294→          </div>
+   295→        </CardContent>
+   296→      </Card>
+   297→    </div>
+   298→  );
+   299→}
+   300→
+   301→// ── P&L by Stock Chart ───────────────────────────────────────
+   302→
+   303→function PnLByStockChart({ holdings }: { holdings: StoredHolding[] }) {
+   304→  const { isDark } = useTheme();
+   305→  const chartTheme = useMemo(() => ({
+   306→    gridStroke: isDark ? '#334155' : '#e2e8f0',
+   307→    tickFill: isDark ? '#94a3b8' : '#64748b',
+   308→    tooltipBg: isDark ? '#1e293b' : '#ffffff',
+   309→    tooltipBorder: isDark ? '#334155' : '#e2e8f0',
+   310→    tooltipText: isDark ? '#e2e8f0' : '#1e293b',
+   311→    tooltipSubtext: isDark ? '#94a3b8' : '#64748b',
+   312→  }), [isDark]);
+   313→
+   314→  const sorted = useMemo(() => [...holdings].sort((a, b) => b.pnl - a.pnl), [holdings]);
+   315→  const chartData = sorted.map((h) => ({ ...h, label: h.symbol }));
+   316→  const hasLoser = sorted.some(h => h.pnl < 0);
+   317→
+   318→  const neutralColors = [
+   319→    isDark ? '#a78bfa' : '#7c3aed',
+   320→    isDark ? '#38bdf8' : '#0284c7',
+   321→    isDark ? '#fbbf24' : '#d97706',
+   322→    isDark ? '#fb923c' : '#ea580c',
+   323→    isDark ? '#c084fc' : '#9333ea',
+   324→    isDark ? '#22d3ee' : '#0891b2',
+   325→    isDark ? '#a3e635' : '#65a30d',
+   326→    isDark ? '#f472b6' : '#db2777',
+   327→  ];
+   328→
+   329→  const labelColorMap: Record<string, string> = {};
+   330→  sorted.forEach((h, i) => {
+   331→    if (i === 0) labelColorMap[h.symbol] = isDark ? '#34d399' : '#059669';
+   332→    else if (hasLoser && i === sorted.length - 1) labelColorMap[h.symbol] = isDark ? '#f87171' : '#dc2626';
+   333→    else labelColorMap[h.symbol] = neutralColors[(i - 1) % neutralColors.length];
+   334→  });
+   335→
+   336→  // Summary stats
+   337→  const winnersCount = sorted.filter(h => h.pnl > 0).length;
+   338→  const losersCount = sorted.filter(h => h.pnl < 0).length;
+   339→  const bestStock = sorted[0];
+   340→  const worstStock = sorted[sorted.length - 1];
+   341→
+   342→  if (sorted.length === 0) {
+   343→    return (
+   344→      <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
+   345→        Add holdings to see P&L breakdown
+   346→      </div>
+   347→    );
+   348→  }
+   349→
+   350→  return (
+   351→    <>
+   352→      <div className="h-80">
+   353→        <ResponsiveContainer width="100%" height="100%">
+   354→          <BarChart data={chartData} layout="vertical" margin={{ left: 10, right: 30, top: 5, bottom: 5 }} cursor={{ fill: 'none' }}>
+   355→            <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} horizontal={false} />
+   356→            <ReferenceLine x={0} stroke={isDark ? '#475569' : '#cbd5e1'} strokeWidth={1} />
+   357→            <XAxis type="number" tick={{ fontSize: 11, fill: chartTheme.tickFill }} tickFormatter={(v) => `${(v >= 0 ? '' : '-')}${Math.abs(v / 1000).toFixed(0)}K`} />
+   358→            <YAxis type="category" dataKey="label" width={55}
+   359→              tick={({ x, y, payload }: { x: number; y: number; payload: { value: string } }) => (
+   360→                <text x={x} y={y} textAnchor="end" fontSize={11} fontWeight={600} fill={labelColorMap[payload.value] || chartTheme.tooltipText} dominantBaseline="middle">{payload.value}</text>
+   361→              )}
+   362→            />
+   363→            <RechartsTooltip
+   364→              content={({ active, payload }) => {
+   365→                if (!active || !payload?.length) return null;
+   366→                const h = payload[0]?.payload as StoredHolding | undefined;
+   367→                if (!h) return null;
+   368→                const color = h.pnl >= 0 ? (isDark ? '#34d399' : '#059669') : (isDark ? '#f87171' : '#dc2626');
+   369→                const labelColor = labelColorMap[h.symbol] || chartTheme.tooltipText;
+   370→                return (
+   371→                  <div style={{ backgroundColor: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', padding: '10px 14px', fontSize: '13px' }}>
+   372→                    <div style={{ fontWeight: 700, fontSize: '13px', color: labelColor }}>{h.symbol}</div>
+   373→                    <div style={{ fontSize: '11px', color: chartTheme.tooltipSubtext, marginTop: '1px', marginBottom: '6px', borderBottom: `1px solid ${chartTheme.tooltipBorder}`, paddingBottom: '6px' }}>{h.name}</div>
+   374→                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+   375→                      <span style={{ color: chartTheme.tooltipSubtext }}>P&L</span>
+   376→                      <span style={{ color, fontWeight: 700 }}>{fmtCurrency(h.pnl)} ({fmtPercent(h.pnlPercent)})</span>
+   377→                    </div>
+   378→                  </div>
+   379→                );
+   380→              }}
+   381→            />
+   382→            <Bar dataKey="pnl" radius={[0, 4, 4, 0]}>
+   383→              {chartData.map((h) => (
+   384→                <Cell key={h.symbol} fill={h.pnl >= 0 ? (isDark ? '#34d399' : '#059669') : (isDark ? '#f87171' : '#dc2626')} />
+   385→              ))}
+   386→            </Bar>
+   387→          </BarChart>
+   388→        </ResponsiveContainer>
+   389→      </div>
+   390→
+   391→      {/* Summary stats */}
+   392→      <div className="grid grid-cols-3 gap-3 mt-4">
+   393→        <div className="rounded-lg border p-3 bg-card">
+   394→          <p className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-1">Winners</p>
+   395→          <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{winnersCount}<span className="text-sm font-normal text-muted-foreground ml-1">/ {holdings.length}</span></p>
+   396→        </div>
+   397→        <div className="rounded-lg border p-3 bg-card">
+   398→          <p className="text-[10px] font-medium text-red-600 dark:text-red-400 uppercase tracking-wider mb-1">Losers</p>
+   399→          <p className="text-xl font-bold text-red-500 dark:text-red-400">{losersCount}<span className="text-sm font-normal text-muted-foreground ml-1">/ {holdings.length}</span></p>
+   400→        </div>
+   401→        <div className="rounded-lg border p-3 bg-card">
+   402→          <p className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-1">Best P&L</p>
+   403→          <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{fmtCurrency(bestStock?.pnl || 0)}</p>
+   404→          <p className="text-xs text-muted-foreground truncate mt-0.5">{bestStock?.symbol} — {bestStock?.name}</p>
+   405→        </div>
+   406→      </div>
+   407→    </>
+   408→  );
+   409→}
+   410→
+   411→// ── Benchmark Comparison Chart ───────────────────────────────
+   412→
+   413→function BenchmarkChart({ holdings, perfData }: {
+   414→  holdings: StoredHolding[];
+   415→  perfData: Record<string, StockPerformance>;
+   416→}) {
+   417→  const { isDark } = useTheme();
+   418→  const chartTheme = useMemo(() => ({
+   419→    gridStroke: isDark ? '#334155' : '#e2e8f0',
+   420→    tickFill: isDark ? '#94a3b8' : '#64748b',
+   421→    tooltipBg: isDark ? '#1e293b' : '#ffffff',
+   422→    tooltipBorder: isDark ? '#334155' : '#e2e8f0',
+   423→    tooltipText: isDark ? '#e2e8f0' : '#1e293b',
+   424→    tooltipSubtext: isDark ? '#94a3b8' : '#64748b',
+   425→  }), [isDark]);
+   426→
+   427→  // Portfolio weighted returns
+   428→  const portfolioReturns = useMemo(() => {
+   429→    const totalMV = holdings.reduce((s, h) => s + h.marketValue, 0);
+   430→    if (totalMV === 0 || Object.keys(perfData).length === 0) return {};
+   431→
+   432→    const result: Record<string, number> = {};
+   433→    for (const period of BENCHMARK_PERIODS) {
+   434→      let weightedSum = 0;
+   435→      let validWeight = 0;
+   436→      for (const h of holdings) {
+   437→        const stockPerf = perfData[h.symbol];
+   438→        if (stockPerf && stockPerf.returns[period] != null) {
+   439→          const weight = h.marketValue / totalMV;
+   440→          weightedSum += stockPerf.returns[period] * weight;
+   441→          validWeight += weight;
+   442→        }
+   443→      }
+   444→      result[period] = validWeight > 0 ? weightedSum / validWeight : 0;
+   445→    }
+   446→    return result;
+   447→  }, [holdings, perfData]);
+   448→
+   449→  // Chart data: one point per period (null = missing data → Recharts breaks line)
+   450→  const benchmarkChartData = useMemo(() => {
+   451→    if (Object.keys(perfData).length === 0) return [];
+   452→    return BENCHMARK_PERIODS.map(period => {
+   453→      const point: Record<string, string | number | null> = { period };
+   454→      const pRet = portfolioReturns[period];
+   455→      point['portfolio'] = pRet != null ? Math.round(pRet * 100) / 100 : null;
+   456→      for (const sym of ['EGX30', 'EGX70_EWI', 'EGX100_EWI', 'XAUUSD']) {
+   457→        const val = perfData[sym]?.returns[period as keyof typeof perfData[sym]['returns']];
+   458→        point[sym] = val != null ? val : null;
+   459→      }
+   460→      return point;
+   461→    });
+   462→  }, [perfData, portfolioReturns]);
+   463→
+   464→  // Lines config
+   465→  const benchmarkLines = useMemo(() => {
+   466→    const lines: Array<{ key: string; label: string; color: string; strokeDash: string; strokeWidth: number }> = [];
+   467→    lines.push({ key: 'portfolio', label: 'My Portfolio', color: '#10b981', strokeDash: '', strokeWidth: 3 });
+   468→    const indexLabels: Record<string, string> = {
+   469→      EGX30: 'EGX 30', EGX70_EWI: 'EGX 70 EWI', EGX100_EWI: 'EGX 100 EWI', XAUUSD: 'Gold (USD)',
+   470→    };
+   471→    for (const [sym, style] of Object.entries(INDEX_STYLES)) {
+   472→      lines.push({ key: sym, label: indexLabels[sym], color: style.color, strokeDash: style.strokeDash, strokeWidth: 2.5 });
+   473→    }
+   474→    return lines;
+   475→  }, []);
+   476→
+   477→  // Stock name color map for table
+   478→  const stockNameColorMap: Record<string, string> = {};
+   479→  holdings.forEach((h, i) => {
+   480→    stockNameColorMap[h.symbol] = STOCK_LINE_COLORS[i % STOCK_LINE_COLORS.length];
+   481→  });
+   482→
+   483→  if (benchmarkChartData.length === 0) {
+   484→    return (
+   485→      <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
+   486→        Waiting for market data...
+   487→      </div>
+   488→    );
+   489→  }
+   490→
+   491→  return (
+   492→    <>
+   493→      <div className="h-80">
+   494→        <ResponsiveContainer width="100%" height="100%">
+   495→          <RechartsLineChart data={benchmarkChartData}>
+   496→            <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} />
+   497→            <XAxis dataKey="period" tick={{ fontSize: 11, fill: chartTheme.tickFill }} />
+   498→            <YAxis tick={{ fontSize: 11, fill: chartTheme.tickFill }} tickFormatter={(v) => `${v.toFixed(1)}%`} />
+   499→            <RechartsTooltip
+   500→              formatter={(value: number, name: string) => {
+   501→                const line = benchmarkLines.find(l => l.key === name);
+   502→                return [` ${value >= 0 ? '+' : ''}${value.toFixed(2)}%`, line?.label || name];
+   503→              }}
+   504→              labelFormatter={(label) => `Period: ${label}`}
+   505→              contentStyle={{ backgroundColor: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '13px', color: chartTheme.tooltipText }}
+   506→            />
+   507→            <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '8px', color: chartTheme.tooltipText }} iconType="line" iconSize={10} />
+   508→            {benchmarkLines.map((line) => (
+   509→              <Line key={line.key} type="monotone" dataKey={line.key} name={line.label} stroke={line.color} strokeWidth={line.strokeWidth} strokeDasharray={line.strokeDash || undefined} dot={{ r: 3, fill: line.color }} activeDot={{ r: 5 }} />
+   510→            ))}
+   511→          </RechartsLineChart>
+   512→        </ResponsiveContainer>
+   513→      </div>
+   514→
+   515→      {/* Performance summary table */}
+   516→      <div className="mt-4 rounded-md border overflow-hidden">
+   517→        <div className="overflow-x-auto">
+   518→          <table className="w-full text-sm">
+   519→            <thead>
+   520→              <tr className="bg-muted/50 border-b">
+   521→                <th className="text-left px-3 py-2 font-medium text-muted-foreground text-xs">Symbol</th>
+   522→                {BENCHMARK_PERIODS.map((p) => (
+   523→                  <th key={p} className="text-right px-3 py-2 font-medium text-muted-foreground text-xs">{p}</th>
+   524→                ))}
+   525→              </tr>
+   526→            </thead>
+   527→            <tbody>
+   528→              {/* Portfolio stocks */}
+   529→              {holdings.map((h) => {
+   530→                const stockPerf = perfData[h.symbol];
+   531→                const stockColor = stockNameColorMap[h.symbol] || 'hsl(var(--foreground))';
+   532→                return (
+   533→                  <tr key={h.symbol} className="border-b last:border-0">
+   534→                    <td className="px-3 py-2">
+   535→                      <div className="flex items-center gap-2">
+   536→                        <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: stockColor }} />
+   537→                        <div className="min-w-0">
+   538→                          <span className="font-semibold" style={{ color: stockColor }}>{h.symbol}</span>
+   539→                          <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">{h.name}</p>
+   540→                        </div>
+   541→                      </div>
+   542→                    </td>
+   543→                    {BENCHMARK_PERIODS.map((p) => {
+   544→                      const val = stockPerf?.returns[p];
+   545→                      if (val == null) return <td key={p} className="text-right px-3 py-2 text-muted-foreground">—</td>;
+   546→                      return <td key={p} className={`text-right px-3 py-2 font-mono text-xs ${pnlColor(val)}`}>{val >= 0 ? '+' : ''}{val.toFixed(2)}%</td>;
+   547→                    })}
+   548→                  </tr>
+   549→                );
+   550→              })}
+   551→
+   552→              {/* Portfolio Aggregate */}
+   553→              {(() => {
+   554→                const hasAnyReturn = BENCHMARK_PERIODS.some(p => portfolioReturns[p] != null);
+   555→                const allReturns = BENCHMARK_PERIODS.map(p => portfolioReturns[p]).filter(v => v != null);
+   556→                const avgReturn = allReturns.length > 0 ? allReturns.reduce((a, b) => a + b, 0) / allReturns.length : 0;
+   557→                const rowBg = avgReturn >= 0 ? 'bg-emerald-50 dark:bg-emerald-950/20' : 'bg-red-50 dark:bg-red-950/20';
+   558→                const textColor = avgReturn >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400';
+   559→                return hasAnyReturn ? (
+   560→                  <tr className={`border-b ${rowBg}`}>
+   561→                    <td className="px-3 py-2">
+   562→                      <div className="flex items-center gap-2">
+   563→                        <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: '#10b981' }} />
+   564→                        <span className={`font-semibold ${textColor}`}>Portfolio (Aggregate)</span>
+   565→                      </div>
+   566→                    </td>
+   567→                    {BENCHMARK_PERIODS.map((p) => {
+   568→                      const val = portfolioReturns[p];
+   569→                      if (val == null) return <td key={p} className="text-right px-3 py-2 text-muted-foreground">—</td>;
+   570→                      return <td key={p} className={`text-right px-3 py-2 font-mono font-semibold ${pnlColor(val)}`}>{val >= 0 ? '+' : ''}{val.toFixed(2)}%</td>;
+   571→                    })}
+   572→                  </tr>
+   573→                ) : null;
+   574→              })()}
+   575→
+   576→              {/* Separator */}
+   577→              <tr className="border-b"><td colSpan={BENCHMARK_PERIODS.length + 1} className="px-3 py-1 bg-muted/30" /></tr>
+   578→
+   579→              {/* Indices + Gold */}
+   580→              {['EGX30', 'EGX70_EWI', 'EGX100_EWI', 'XAUUSD'].map((sym) => {
+   581→                const idxPerf = perfData[sym];
+   582→                const idxLabel = sym === 'EGX30' ? 'EGX 30' : sym === 'EGX70_EWI' ? 'EGX 70 EWI' : sym === 'EGX100_EWI' ? 'EGX 100 EWI' : 'Gold (USD)';
+   583→                const idxStyle = INDEX_STYLES[sym];
+   584→                if (!idxPerf) return null;
+   585→                return (
+   586→                  <tr key={sym} className="border-b last:border-0 bg-muted/20">
+   587→                    <td className="px-3 py-2">
+   588→                      <div className="flex items-center gap-2">
+   589→                        <div className="w-2.5 h-0.5 shrink-0 rounded" style={{ backgroundColor: idxStyle?.color }} />
+   590→                        {sym === 'XAUUSD' && <Gem className="h-3 w-3 text-yellow-500 shrink-0" />}
+   591→                        <span className="font-semibold text-xs" style={{ color: idxStyle?.color }}>{idxLabel}</span>
+   592→                      </div>
+   593→                    </td>
+   594→                    {BENCHMARK_PERIODS.map((p) => {
+   595→                      const val = idxPerf.returns[p];
+   596→                      if (val == null) return <td key={p} className="text-right px-3 py-2 text-muted-foreground">—</td>;
+   597→                      return <td key={p} className={`text-right px-3 py-2 font-mono text-xs ${pnlColor(val)}`}>{val >= 0 ? '+' : ''}{val.toFixed(2)}%</td>;
+   598→                    })}
+   599→                  </tr>
+   600→                );
+   601→              })}
+   602→            </tbody>
+   603→          </table>
+   604→        </div>
+   605→      </div>
+   606→    </>
+   607→  );
+   608→}
+   609→
+   610→// ── Main PortfolioCharts with Tabs ─────────────────────────────
+   611→
+   612→export function PortfolioCharts({ holdings, perfData, indexData }: PortfolioChartsProps) {
+   613→  const [performancePeriod, setPerformancePeriod] = useState<string>('1M');
+   614→
+   615→  // Derive summary for PerformanceChart
+   616→  const summary = useMemo(() => {
+   617→    if (holdings.length === 0) return null;
+   618→    const totalInvestment = holdings.reduce((s, h) => s + h.costBasis, 0);
+   619→    const totalMarketValue = holdings.reduce((s, h) => s + h.marketValue, 0);
+   620→    const todaysChange = holdings.reduce((s, h) => s + h.dayChange, 0);
+   621→    return { totalInvestment, totalMarketValue, todaysChange };
+   622→  }, [holdings]);
+   623→
+   624→  return (
+   625→    <Tabs defaultValue="performance" className="space-y-4">
+   626→      <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 max-w-2xl">
+   627→        <TabsTrigger value="performance" className="gap-1.5 text-xs sm:text-sm">
+   628→          <LineChart className="h-3.5 w-3.5" />
+   629→          Performance
+   630→        </TabsTrigger>
+   631→        <TabsTrigger value="allocation" className="gap-1.5 text-xs sm:text-sm">
+   632→          <PieChartIcon className="h-3.5 w-3.5" />
+   633→          Allocation
+   634→        </TabsTrigger>
+   635→        <TabsTrigger value="returns" className="gap-1.5 text-xs sm:text-sm">
+   636→          <BarChart3 className="h-3.5 w-3.5" />
+   637→          P&L by Stock
+   638→        </TabsTrigger>
+   639→        <TabsTrigger value="benchmark" className="gap-1.5 text-xs sm:text-sm">
+   640→          <TrendingUp className="h-3.5 w-3.5" />
+   641→          Benchmark
+   642→        </TabsTrigger>
+   643→
+   644→      </TabsList>
+   645→
+   646→      {/* Performance */}
+   647→      <TabsContent value="performance">
+   648→        <Card>
+   649→          <CardHeader className="pb-2">
+   650→            <div className="flex items-center justify-between">
+   651→              <div>
+   652→                <CardTitle className="text-base">Portfolio Value</CardTitle>
+   653→                <CardDescription>Based on current holdings and market data</CardDescription>
+   654→              </div>
+   655→              <div className="flex flex-wrap gap-1">
+   656→                {PERFORMANCE_PERIODS.map((p) => (
+   657→                  <button
+   658→                    key={p}
+   659→                    type="button"
+   660→                    className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+   661→                      performancePeriod === p
+   662→                        ? 'bg-primary text-primary-foreground'
+   663→                        : 'bg-muted text-muted-foreground hover:bg-accent'
+   664→                    }`}
+   665→                    onClick={() => setPerformancePeriod(p)}
+   666→                  >
+   667→                    {p}
+   668→                  </button>
+   669→                ))}
+   670→              </div>
+   671→            </div>
+   672→          </CardHeader>
+   673→          <CardContent>
+   674→            <PerformanceChart holdings={holdings} summary={summary} performancePeriod={performancePeriod} />
+   675→          </CardContent>
+   676→        </Card>
+   677→      </TabsContent>
+   678→
+   679→      {/* Allocation */}
+   680→      <TabsContent value="allocation">
+   681→        <AllocationCharts holdings={holdings} />
+   682→      </TabsContent>
+   683→
+   684→      {/* P&L by Stock */}
+   685→      <TabsContent value="returns">
+   686→        <Card>
+   687→          <CardHeader className="pb-2">
+   688→            <CardTitle className="text-base">P&L by Stock</CardTitle>
+   689→            <CardDescription>Total profit/loss for each holding</CardDescription>
+   690→          </CardHeader>
+   691→          <CardContent>
+   692→            <PnLByStockChart holdings={holdings} />
+   693→          </CardContent>
+   694→        </Card>
+   695→      </TabsContent>
+   696→
+   697→      {/* Benchmark */}
+   698→      <TabsContent value="benchmark">
+   699→        <Card>
+   700→          <CardHeader className="pb-2">
+   701→            <div>
+   702→              <CardTitle className="text-base">Benchmark Comparison</CardTitle>
+   703→              <CardDescription>Your portfolio's aggregate performance vs EGX indices and Gold</CardDescription>
+   704→            </div>
+   705→          </CardHeader>
+   706→          <CardContent>
+   707→            <BenchmarkChart holdings={holdings} perfData={perfData} />
+   708→          </CardContent>
+   709→        </Card>
+   710→      </TabsContent>
+   711→
+   712→
+   713→    </Tabs>
+   714→  );
+   715→}
+   716→
