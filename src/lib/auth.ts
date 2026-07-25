@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { prisma } from '@/lib/db';
 import { cookies } from 'next/headers';
+import { NextResponse } from 'next/server';
 
 const SESSION_COOKIE = 'egx-session';
 const SESSION_MAX_AGE_DAYS = 90;
@@ -25,7 +26,7 @@ export function generateToken(): string {
   return crypto.randomUUID();
 }
 
-/** Get the current session from cookies */
+/** Get the current session from cookies (read-only, for auth checks) */
 export async function getCurrentSession() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
@@ -48,8 +49,8 @@ export async function getCurrentSession() {
   return session;
 }
 
-/** Create a session and set the cookie */
-export async function createSession(accountId: string) {
+/** Create a session in the DB and return the token (caller sets the cookie on the response) */
+export async function createSession(accountId: string): Promise<string> {
   const token = generateToken();
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + SESSION_MAX_AGE_DAYS);
@@ -58,28 +59,32 @@ export async function createSession(accountId: string) {
     data: { token, accountId, expiresAt },
   });
 
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, token, {
+  return token;
+}
+
+/** Set the session cookie on a NextResponse */
+export function setSessionCookie(response: NextResponse, token: string): void {
+  response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: false, // sandbox environment
     sameSite: 'lax',
     maxAge: SESSION_MAX_AGE_DAYS * 24 * 60 * 60,
     path: '/',
   });
-
-  return token;
 }
 
-/** Delete the current session and clear the cookie */
-export async function deleteSession() {
+/** Clear the session cookie on a NextResponse */
+export function clearSessionCookie(response: NextResponse): void {
+  response.cookies.delete(SESSION_COOKIE);
+}
+
+/** Delete the current session from the DB */
+export async function deleteSessionFromDb(): Promise<void> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
-
   if (token) {
     await prisma.session.deleteMany({ where: { token } });
   }
-
-  cookieStore.delete(SESSION_COOKIE);
 }
 
 /** Clean up expired sessions (call periodically) */

@@ -1,0 +1,1240 @@
+     1→'use client';
+     2→
+     3→import React, { useState, useEffect } from 'react';
+     4→import Link from 'next/link';
+     5→import { motion, useInView } from 'framer-motion';
+     6→import { useTheme } from 'next-themes';
+     7→import {
+     8→  BarChart3,
+     9→  LineChart,
+    10→  Gem,
+    11→  DollarSign,
+    12→  Activity,
+    13→  Clock,
+    14→  TrendingUp,
+    15→  Star,
+    16→  Check,
+    17→  ArrowRight,
+    18→  Menu,
+    19→  X,
+    20→  Sun,
+    21→  Moon,
+    22→  Shield,
+    23→  Zap,
+    24→  PieChart,
+    25→  ArrowUpRight,
+    26→  Users,
+    27→  Globe,
+    28→  ChevronRight,
+    29→  Quote,
+    30→  Layers,
+    31→  Search,
+    32→  Plus,
+    33→} from 'lucide-react';
+    34→
+    35→import { Button } from '@/components/ui/button';
+    36→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+    37→import { Badge } from '@/components/ui/badge';
+    38→import { Separator } from '@/components/ui/separator';
+    39→import {
+    40→  Accordion,
+    41→  AccordionContent,
+    42→  AccordionItem,
+    43→  AccordionTrigger,
+    44→} from '@/components/ui/accordion';
+    45→import {
+    46→  Sheet,
+    47→  SheetContent,
+    48→  SheetHeader,
+    49→  SheetTitle,
+    50→  SheetTrigger,
+    51→  SheetClose,
+    52→} from '@/components/ui/sheet';
+    53→
+    54→// ── Animation Helpers ──────────────────────────────────────────
+    55→
+    56→function FadeIn({
+    57→  children,
+    58→  className,
+    59→  delay = 0,
+    60→  direction = 'up',
+    61→  duration = 0.5,
+    62→}: {
+    63→  children: React.ReactNode;
+    64→  className?: string;
+    65→  delay?: number;
+    66→  direction?: 'up' | 'down' | 'left' | 'right';
+    67→  duration?: number;
+    68→}) {
+    69→  const dirMap = {
+    70→    up: { y: 24, x: 0 },
+    71→    down: { y: -24, x: 0 },
+    72→    left: { x: 24, y: 0 },
+    73→    right: { x: -24, y: 0 },
+    74→  };
+    75→  const offset = dirMap[direction];
+    76→
+    77→  return (
+    78→    <motion.div
+    79→      className={className}
+    80→      initial={{ opacity: 0, ...offset }}
+    81→      whileInView={{ opacity: 1, x: 0, y: 0 }}
+    82→      viewport={{ once: true, margin: '-60px' }}
+    83→      transition={{ duration, delay, ease: [0.21, 0.47, 0.32, 0.98] }}
+    84→    >
+    85→      {children}
+    86→    </motion.div>
+    87→  );
+    88→}
+    89→
+    90→function StaggerContainer({ children, className }: { children: React.ReactNode; className?: string }) {
+    91→  return (
+    92→    <motion.div
+    93→      className={className}
+    94→      initial="hidden"
+    95→      whileInView="visible"
+    96→      viewport={{ once: true, margin: '-60px' }}
+    97→      variants={{
+    98→        hidden: {},
+    99→        visible: { transition: { staggerChildren: 0.1 } },
+   100→      }}
+   101→    >
+   102→      {children}
+   103→    </motion.div>
+   104→  );
+   105→}
+   106→
+   107→const staggerItem = {
+   108→  hidden: { opacity: 0, y: 20 },
+   109→  visible: {
+   110→    opacity: 1,
+   111→    y: 0,
+   112→    transition: { duration: 0.5, ease: [0.21, 0.47, 0.32, 0.98] },
+   113→  },
+   114→};
+   115→
+   116→// ── Counter Animation ─────────────────────────────────────────
+   117→
+   118→function AnimatedCounter({ target, suffix = '' }: { target: number; suffix?: string }) {
+   119→  const [count, setCount] = useState(0);
+   120→  const ref = React.useRef<HTMLSpanElement>(null);
+   121→  const inView = useInView(ref, { once: true });
+   122→
+   123→  useEffect(() => {
+   124→    if (!inView) return;
+   125→    let start = 0;
+   126→    const duration = 1500;
+   127→    const step = (timestamp: number) => {
+   128→      if (!start) start = timestamp;
+   129→      const progress = Math.min((timestamp - start) / duration, 1);
+   130→      const eased = 1 - Math.pow(1 - progress, 3);
+   131→      setCount(Math.floor(eased * target));
+   132→      if (progress < 1) requestAnimationFrame(step);
+   133→    };
+   134→    requestAnimationFrame(step);
+   135→  }, [inView, target]);
+   136→
+   137→  return (
+   138→    <span ref={ref}>
+   139→      {count}
+   140→      {suffix}
+   141→    </span>
+   142→  );
+   143→}
+   144→
+   145→// ── Navbar ─────────────────────────────────────────────────────
+   146→
+   147→function Navbar() {
+   148→  const { theme, setTheme, resolvedTheme } = useTheme();
+   149→  const [scrolled, setScrolled] = useState(false);
+   150→  const [mobileOpen, setMobileOpen] = useState(false);
+   151→
+   152→  useEffect(() => {
+   153→    const handleScroll = () => setScrolled(window.scrollY > 20);
+   154→    window.addEventListener('scroll', handleScroll, { passive: true });
+   155→    return () => window.removeEventListener('scroll', handleScroll);
+   156→  }, []);
+   157→
+   158→  const navLinks = [
+   159→    { label: 'Features', href: '#features' },
+   160→    { label: 'How It Works', href: '#how-it-works' },
+   161→    { label: 'Pricing', href: '#pricing' },
+   162→    { label: 'FAQ', href: '#faq' },
+   163→  ];
+   164→
+   165→  return (
+   166→    <header
+   167→      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
+   168→        scrolled
+   169→          ? 'bg-background/80 backdrop-blur-xl border-b shadow-sm'
+   170→          : 'bg-transparent'
+   171→      }`}
+   172→    >
+   173→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+   174→        <div className="flex items-center justify-between h-16">
+   175→          {/* Logo */}
+   176→          <Link href="/" className="flex items-center gap-2.5 group">
+   177→            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-sm group-hover:shadow-emerald-500/25 transition-shadow">
+   178→              <TrendingUp className="w-4 h-4 text-white" />
+   179→            </div>
+   180→            <span className="font-semibold text-lg tracking-tight">
+   181→              EGX <span className="text-emerald-600 dark:text-emerald-400">Portfolio</span>
+   182→            </span>
+   183→          </Link>
+   184→
+   185→          {/* Desktop Nav */}
+   186→          <nav className="hidden md:flex items-center gap-1">
+   187→            {navLinks.map((link) => (
+   188→              <a
+   189→                key={link.href}
+   190→                href={link.href}
+   191→                className="px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50"
+   192→              >
+   193→                {link.label}
+   194→              </a>
+   195→            ))}
+   196→          </nav>
+   197→
+   198→          {/* Desktop Actions */}
+   199→          <div className="hidden md:flex items-center gap-3">
+   200→            <Button
+   201→              variant="ghost"
+   202→              size="icon"
+   203→              onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+   204→              className="rounded-full"
+   205→              aria-label="Toggle theme"
+   206→            >
+   207→              <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+   208→              <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+   209→            </Button>
+   210→            <Button variant="outline" size="sm" asChild>
+   211→              <Link href="/dashboard">Log In</Link>
+   212→            </Button>
+   213→            <Button
+   214→              size="sm"
+   215→              className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+   216→              asChild
+   217→            >
+   218→              <Link href="/dashboard">Get Started</Link>
+   219→            </Button>
+   220→          </div>
+   221→
+   222→          {/* Mobile Menu */}
+   223→          <div className="flex md:hidden items-center gap-2">
+   224→            <Button
+   225→              variant="ghost"
+   226→              size="icon"
+   227→              onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+   228→              className="rounded-full"
+   229→              aria-label="Toggle theme"
+   230→            >
+   231→              <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+   232→              <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+   233→            </Button>
+   234→            <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+   235→              <SheetTrigger asChild>
+   236→                <Button variant="ghost" size="icon" aria-label="Open menu">
+   237→                  <Menu className="h-5 w-5" />
+   238→                </Button>
+   239→              </SheetTrigger>
+   240→              <SheetContent side="right" className="w-72">
+   241→                <SheetHeader>
+   242→                  <SheetTitle className="flex items-center gap-2">
+   243→                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
+   244→                      <TrendingUp className="w-3.5 h-3.5 text-white" />
+   245→                    </div>
+   246→                    EGX Portfolio
+   247→                  </SheetTitle>
+   248→                </SheetHeader>
+   249→                <nav className="flex flex-col gap-1 mt-6">
+   250→                  {navLinks.map((link) => (
+   251→                    <a
+   252→                      key={link.href}
+   253→                      href={link.href}
+   254→                      onClick={() => setMobileOpen(false)}
+   255→                      className="flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-lg hover:bg-muted/50 transition-colors"
+   256→                    >
+   257→                      {link.label}
+   258→                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
+   259→                    </a>
+   260→                  ))}
+   261→                  <Separator className="my-3" />
+   262→                  <Button variant="outline" className="w-full" asChild>
+   263→                    <Link href="/dashboard" onClick={() => setMobileOpen(false)}>Log In</Link>
+   264→                  </Button>
+   265→                  <Button
+   266→                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white mt-1"
+   267→                    asChild
+   268→                  >
+   269→                    <Link href="/dashboard" onClick={() => setMobileOpen(false)}>Get Started</Link>
+   270→                  </Button>
+   271→                </nav>
+   272→              </SheetContent>
+   273→            </Sheet>
+   274→          </div>
+   275→        </div>
+   276→      </div>
+   277→    </header>
+   278→  );
+   279→}
+   280→
+   281→// ── Hero Section ───────────────────────────────────────────────
+   282→
+   283→function HeroSection() {
+   284→  return (
+   285→    <section className="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
+   286→      {/* Background decoration */}
+   287→      <div className="absolute inset-0 -z-10">
+   288→        {/* Grid pattern */}
+   289→        <div
+   290→          className="absolute inset-0 opacity-[0.03] dark:opacity-[0.05]"
+   291→          style={{
+   292→            backgroundImage:
+   293→              'linear-gradient(to right, currentColor 1px, transparent 1px), linear-gradient(to bottom, currentColor 1px, transparent 1px)',
+   294→            backgroundSize: '64px 64px',
+   295→          }}
+   296→        />
+   297→        {/* Gradient orbs */}
+   298→        <div className="absolute top-1/4 -left-32 w-96 h-96 rounded-full bg-emerald-500/20 blur-[120px]" />
+   299→        <div className="absolute bottom-1/4 -right-32 w-96 h-96 rounded-full bg-emerald-600/15 blur-[120px]" />
+   300→        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-emerald-400/5 blur-[100px]" />
+   301→      </div>
+   302→
+   303→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 sm:py-24 lg:py-32">
+   304→        <div className="text-center max-w-4xl mx-auto">
+   305→          {/* Badge */}
+   306→          <FadeIn delay={0}>
+   307→            <Badge
+   308→              variant="outline"
+   309→              className="mb-6 px-4 py-1.5 text-sm font-medium border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50"
+   310→            >
+   311→              <Zap className="w-3.5 h-3.5 mr-1.5" />
+   312→              The #1 Egyptian Investment Tracker
+   313→            </Badge>
+   314→          </FadeIn>
+   315→
+   316→          {/* English Headline */}
+   317→          <FadeIn delay={0.1}>
+   318→            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1]">
+   319→              Track Your Egyptian
+   320→              <br />
+   321→              Investments{' '}
+   322→              <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 dark:from-emerald-400 dark:to-emerald-300 bg-clip-text text-transparent">
+   323→                Like a Pro
+   324→              </span>
+   325→            </h1>
+   326→          </FadeIn>
+   327→
+   328→          {/* Arabic Subtitle */}
+   329→          <FadeIn delay={0.2}>
+   330→            <p
+   331→              className="mt-4 text-xl sm:text-2xl md:text-3xl font-medium text-muted-foreground"
+   332→              dir="rtl"
+   333→              lang="ar"
+   334→            >
+   335→              تتبع استثماراتك المصرية كالمحترفين
+   336→            </p>
+   337→          </FadeIn>
+   338→
+   339→          {/* Subheadline */}
+   340→          <FadeIn delay={0.3}>
+   341→            <p className="mt-6 text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+   342→              Real-time EGX stock data, gold prices in EGP, USD/EGP forex tracking,
+   343→              and powerful portfolio analytics — all in one beautiful dashboard.
+   344→            </p>
+   345→          </FadeIn>
+   346→
+   347→          {/* CTA Buttons */}
+   348→          <FadeIn delay={0.4}>
+   349→            <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+   350→              <Button
+   351→                size="lg"
+   352→                className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/25 hover:shadow-emerald-600/40 transition-all h-12 px-8 text-base font-semibold"
+   353→                asChild
+   354→              >
+   355→                <Link href="/dashboard">
+   356→                  Get Started Free
+   357→                  <ArrowRight className="ml-2 h-4 w-4" />
+   358→                </Link>
+   359→              </Button>
+   360→              <Button
+   361→                variant="outline"
+   362→                size="lg"
+   363→                className="h-12 px-8 text-base font-medium"
+   364→                asChild
+   365→              >
+   366→                <a href="#demo">
+   367→                  <Activity className="mr-2 h-4 w-4" />
+   368→                  View Demo
+   369→                </a>
+   370→              </Button>
+   371→            </div>
+   372→          </FadeIn>
+   373→
+   374→          {/* Stats Bar */}
+   375→          <FadeIn delay={0.5}>
+   376→            <div className="mt-16 sm:mt-20 grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 max-w-3xl mx-auto">
+   377→              {[
+   378→                { value: 220, suffix: '+', label: 'Stocks Tracked' },
+   379→                { value: 24, suffix: '/7', label: 'Real-time Gold' },
+   380→                { value: 1, suffix: '', label: 'USD/EGP Live' },
+   381→                { value: 100, suffix: '%', label: 'Free to Use' },
+   382→              ].map((stat) => (
+   383→                <div
+   384→                  key={stat.label}
+   385→                  className="flex flex-col items-center p-4 rounded-xl bg-muted/30 border border-border/50"
+   386→                >
+   387→                  <span className="text-2xl sm:text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+   388→                    <AnimatedCounter target={stat.value} suffix={stat.suffix} />
+   389→                  </span>
+   390→                  <span className="text-xs sm:text-sm text-muted-foreground mt-1 font-medium">
+   391→                    {stat.label}
+   392→                  </span>
+   393→                </div>
+   394→              ))}
+   395→            </div>
+   396→          </FadeIn>
+   397→        </div>
+   398→      </div>
+   399→
+   400→      {/* Bottom fade */}
+   401→      <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background to-transparent" />
+   402→    </section>
+   403→  );
+   404→}
+   405→
+   406→// ── Features Section ───────────────────────────────────────────
+   407→
+   408→const features = [
+   409→  {
+   410→    icon: BarChart3,
+   411→    title: 'Real-time Market Data',
+   412→    description:
+   413→      'Live EGX indices, stock prices, volume, and market depth updates every 5 seconds during trading hours.',
+   414→    gradient: 'from-emerald-500 to-teal-600',
+   415→  },
+   416→  {
+   417→    icon: PieChart,
+   418→    title: 'Portfolio Tracking',
+   419→    description:
+   420→      'Track P&L, allocation breakdown, performance charts, and transaction history across all your holdings.',
+   421→    gradient: 'from-emerald-600 to-emerald-700',
+   422→  },
+   423→  {
+   424→    icon: Gem,
+   425→    title: 'Gold Price Tracking',
+   426→    description:
+   427→      '24K, 21K, 18K gold prices in EGP with daily changes, highs/lows, and gold pound tracking.',
+   428→    gradient: 'from-amber-500 to-orange-600',
+   429→  },
+   430→  {
+   431→    icon: Activity,
+   432→    title: 'Technical Analysis',
+   433→    description:
+   434→      'Support & resistance levels, moving averages, RSI, MACD, Bollinger Bands, and pivot points.',
+   435→    gradient: 'from-violet-500 to-purple-600',
+   436→  },
+   437→  {
+   438→    icon: DollarSign,
+   439→    title: 'USD/EGP Forex',
+   440→    description:
+   441→      'Live exchange rate tracking with historical changes, percentage moves, and multi-source data.',
+   442→    gradient: 'from-sky-500 to-blue-600',
+   443→  },
+   444→  {
+   445→    icon: Clock,
+   446→    title: 'Market Status',
+   447→    description:
+   448→      'Know exactly when EGX, gold, and forex markets are open or closed with live status indicators.',
+   449→    gradient: 'from-rose-500 to-pink-600',
+   450→  },
+   451→];
+   452→
+   453→function FeaturesSection() {
+   454→  return (
+   455→    <section id="features" className="py-20 sm:py-24">
+   456→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+   457→        <FadeIn className="text-center max-w-3xl mx-auto mb-16">
+   458→          <Badge variant="secondary" className="mb-4">
+   459→            <Layers className="w-3.5 h-3.5 mr-1.5" />
+   460→            Features
+   461→          </Badge>
+   462→          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight">
+   463→            Everything You Need to{' '}
+   464→            <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 dark:from-emerald-400 dark:to-emerald-300 bg-clip-text text-transparent">
+   465→              Trade Smarter
+   466→            </span>
+   467→          </h2>
+   468→          <p className="mt-4 text-lg text-muted-foreground">
+   469→            Comprehensive tools designed specifically for the Egyptian market. All data, all markets, one platform.
+   470→          </p>
+   471→        </FadeIn>
+   472→
+   473→        <StaggerContainer className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+   474→          {features.map((feature) => (
+   475→            <motion.div key={feature.title} variants={staggerItem}>
+   476→              <Card className="group h-full hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300 hover:-translate-y-1 border-border/60 bg-card/80 backdrop-blur-sm">
+   477→                <CardHeader>
+   478→                  <div
+   479→                    className={`w-11 h-11 rounded-xl bg-gradient-to-br ${feature.gradient} flex items-center justify-center shadow-sm mb-2`}
+   480→                  >
+   481→                    <feature.icon className="w-5 h-5 text-white" />
+   482→                  </div>
+   483→                  <CardTitle className="text-lg">{feature.title}</CardTitle>
+   484→                </CardHeader>
+   485→                <CardContent>
+   486→                  <CardDescription className="text-sm leading-relaxed">
+   487→                    {feature.description}
+   488→                  </CardDescription>
+   489→                </CardContent>
+   490→              </Card>
+   491→            </motion.div>
+   492→          ))}
+   493→        </StaggerContainer>
+   494→      </div>
+   495→    </section>
+   496→  );
+   497→}
+   498→
+   499→// ── How It Works Section ───────────────────────────────────────
+   500→
+   501→const steps = [
+   502→  {
+   503→    number: '01',
+   504→    title: 'Create Portfolio',
+   505→    description:
+   506→      'Set up your portfolio in seconds with a simple username. No email or signup required.',
+   507→    icon: Users,
+   508→  },
+   509→  {
+   510→    number: '02',
+   511→    title: 'Add Positions',
+   512→    description:
+   513→      'Add your stock holdings with purchase price, shares, and date. We handle the rest.',
+   514→    icon: Plus,
+   515→  },
+   516→  {
+   517→    number: '03',
+   518→    title: 'Track Performance',
+   519→    description:
+   520→      'Watch your portfolio grow with real-time P&L, allocation charts, and performance analytics.',
+   521→    icon: LineChart,
+   522→  },
+   523→];
+   524→
+   525→function HowItWorksSection() {
+   526→  return (
+   527→    <section id="how-it-works" className="py-20 sm:py-24 bg-muted/30">
+   528→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+   529→        <FadeIn className="text-center max-w-3xl mx-auto mb-16">
+   530→          <Badge variant="secondary" className="mb-4">
+   531→            <ArrowUpRight className="w-3.5 h-3.5 mr-1.5" />
+   532→            How It Works
+   533→          </Badge>
+   534→          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight">
+   535→            Start Tracking in{' '}
+   536→            <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 dark:from-emerald-400 dark:to-emerald-300 bg-clip-text text-transparent">
+   537→              3 Simple Steps
+   538→            </span>
+   539→          </h2>
+   540→          <p className="mt-4 text-lg text-muted-foreground">
+   541→            No complicated setup. Get started in under a minute and start making informed decisions.
+   542→          </p>
+   543→        </FadeIn>
+   544→
+   545→        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-4 relative">
+   546→          {/* Connecting line (desktop only) */}
+   547→          <div className="hidden md:block absolute top-24 left-[20%] right-[20%] h-px bg-gradient-to-r from-emerald-300 via-emerald-500 to-emerald-300 dark:from-emerald-700 dark:via-emerald-500 dark:to-emerald-700" />
+   548→
+   549→          {steps.map((step, i) => (
+   550→            <FadeIn key={step.number} delay={i * 0.15} className="relative">
+   551→              <div className="flex flex-col items-center text-center">
+   552→                {/* Step number circle */}
+   553→                <div className="relative z-10 w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-lg shadow-emerald-600/20 mb-6">
+   554→                  <step.icon className="w-7 h-7 text-white" />
+   555→                </div>
+   556→                {/* Step number */}
+   557→                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tracking-widest uppercase mb-2">
+   558→                  Step {step.number}
+   559→                </span>
+   560→                <h3 className="text-xl font-semibold mb-3">{step.title}</h3>
+   561→                <p className="text-muted-foreground text-sm max-w-xs leading-relaxed">
+   562→                  {step.description}
+   563→                </p>
+   564→              </div>
+   565→            </FadeIn>
+   566→          ))}
+   567→        </div>
+   568→      </div>
+   569→    </section>
+   570→  );
+   571→}
+   572→
+   573→// ── Demo Preview Section ───────────────────────────────────────
+   574→
+   575→function DemoPreviewSection() {
+   576→  return (
+   577→    <section id="demo" className="py-20 sm:py-24">
+   578→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+   579→        <FadeIn className="text-center max-w-3xl mx-auto mb-12">
+   580→          <Badge variant="secondary" className="mb-4">
+   581→            <Activity className="w-3.5 h-3.5 mr-1.5" />
+   582→            Live Preview
+   583→          </Badge>
+   584→          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight">
+   585→            See Your{' '}
+   586→            <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 dark:from-emerald-400 dark:to-emerald-300 bg-clip-text text-transparent">
+   587→              Dashboard
+   588→            </span>
+   589→          </h2>
+   590→          <p className="mt-4 text-lg text-muted-foreground">
+   591→            A powerful, real-time dashboard designed for Egyptian investors.
+   592→          </p>
+   593→        </FadeIn>
+   594→
+   595→        <FadeIn delay={0.2}>
+   596→          <div className="relative">
+   597→            {/* Glow behind */}
+   598→            <div className="absolute inset-0 bg-emerald-500/10 blur-[80px] rounded-3xl -z-10" />
+   599→
+   600→            {/* Browser window */}
+   601→            <div className="rounded-xl border bg-card shadow-2xl overflow-hidden">
+   602→              {/* Title bar */}
+   603→              <div className="flex items-center gap-2 px-4 py-3 bg-muted/50 border-b">
+   604→                <div className="flex gap-1.5">
+   605→                  <div className="w-3 h-3 rounded-full bg-red-400" />
+   606→                  <div className="w-3 h-3 rounded-full bg-amber-400" />
+   607→                  <div className="w-3 h-3 rounded-full bg-emerald-400" />
+   608→                </div>
+   609→                <div className="flex-1 flex justify-center">
+   610→                  <div className="flex items-center gap-2 px-4 py-1.5 bg-muted rounded-lg text-xs text-muted-foreground font-mono">
+   611→                    <Globe className="w-3 h-3" />
+   612→                    egxportfolio.com/dashboard
+   613→                  </div>
+   614→                </div>
+   615→                <div className="w-16" />
+   616→              </div>
+   617→
+   618→              {/* Dashboard mockup */}
+   619→              <div className="p-4 sm:p-6 space-y-4">
+   620→                {/* Top stats row */}
+   621→                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+   622→                  {[
+   623→                    { label: 'Total Value', value: 'EGP 245,830', change: '+2.4%', up: true },
+   624→                    { label: "Today's P&L", value: '+EGP 5,720', change: '+2.38%', up: true },
+   625→                    { label: 'Total P&L', value: '+EGP 45,830', change: '+22.9%', up: true },
+   626→                    { label: 'Gold (24K/g)', value: 'EGP 3,420', change: '+0.8%', up: true },
+   627→                  ].map((stat) => (
+   628→                    <div
+   629→                      key={stat.label}
+   630→                      className="rounded-lg border bg-muted/30 p-3 sm:p-4"
+   631→                    >
+   632→                      <p className="text-xs text-muted-foreground font-medium">{stat.label}</p>
+   633→                      <p className="text-sm sm:text-base font-bold mt-1">{stat.value}</p>
+   634→                      <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+   635→                        {stat.change}
+   636→                      </span>
+   637→                    </div>
+   638→                  ))}
+   639→                </div>
+   640→
+   641→                {/* Main content area */}
+   642→                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+   643→                  {/* Chart placeholder */}
+   644→                  <div className="lg:col-span-2 rounded-lg border bg-muted/20 p-4">
+   645→                    <div className="flex items-center justify-between mb-4">
+   646→                      <div>
+   647→                        <p className="text-sm font-semibold">Portfolio Performance</p>
+   648→                        <p className="text-xs text-muted-foreground">Last 30 days</p>
+   649→                      </div>
+   650→                      <div className="flex gap-1">
+   651→                        {['1D', '1W', '1M', '3M', '1Y'].map((p) => (
+   652→                          <span
+   653→                            key={p}
+   654→                            className={`px-2 py-0.5 text-xs rounded font-medium ${
+   655→                              p === '1M'
+   656→                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400'
+   657→                                : 'text-muted-foreground'
+   658→                            }`}
+   659→                          >
+   660→                            {p}
+   661→                          </span>
+   662→                        ))}
+   663→                      </div>
+   664→                    </div>
+   665→                    {/* SVG Chart Line */}
+   666→                    <svg
+   667→                      viewBox="0 0 600 150"
+   668→                      className="w-full h-32 sm:h-40"
+   669→                      fill="none"
+   670→                      preserveAspectRatio="none"
+   671→                    >
+   672→                      <defs>
+   673→                        <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+   674→                          <stop offset="0%" stopColor="rgb(16 185 129)" stopOpacity="0.3" />
+   675→                          <stop offset="100%" stopColor="rgb(16 185 129)" stopOpacity="0" />
+   676→                        </linearGradient>
+   677→                      </defs>
+   678→                      <path
+   679→                        d="M0,120 C50,110 80,95 120,85 C160,75 200,90 240,70 C280,50 320,60 360,40 C400,20 440,35 480,25 C520,15 560,20 600,10"
+   680→                        stroke="rgb(16 185 129)"
+   681→                        strokeWidth="2.5"
+   682→                        fill="none"
+   683→                        strokeLinecap="round"
+   684→                      />
+   685→                      <path
+   686→                        d="M0,120 C50,110 80,95 120,85 C160,75 200,90 240,70 C280,50 320,60 360,40 C400,20 440,35 480,25 C520,15 560,20 600,10 L600,150 L0,150 Z"
+   687→                        fill="url(#chartGrad)"
+   688→                      />
+   689→                    </svg>
+   690→                  </div>
+   691→
+   692→                  {/* Holdings list */}
+   693→                  <div className="rounded-lg border bg-muted/20 p-4">
+   694→                    <p className="text-sm font-semibold mb-3">Top Holdings</p>
+   695→                    <div className="space-y-3">
+   696→                      {[
+   697→                        { sym: 'CIB', name: 'Commercial Int.', pnl: '+12.4%', price: 'EGP 78.50' },
+   698→                        { sym: 'ORAS', name: 'Orascom Construction', pnl: '+8.2%', price: 'EGP 15.30' },
+   699→                        { sym: 'EGID', name: 'Egyptian Int. Hotels', pnl: '-3.1%', price: 'EGP 4.82' },
+   700→                        { sym: 'AMZN', name: 'Alexandria Minerals', pnl: '+5.7%', price: 'EGP 22.10' },
+   701→                        { sym: 'SWDY', name: 'SODIC', pnl: '+1.3%', price: 'EGP 11.45' },
+   702→                      ].map((stock) => (
+   703→                        <div key={stock.sym} className="flex items-center justify-between">
+   704→                          <div>
+   705→                            <p className="text-sm font-semibold">{stock.sym}</p>
+   706→                            <p className="text-[10px] text-muted-foreground truncate max-w-[100px]">{stock.name}</p>
+   707→                          </div>
+   708→                          <div className="text-right">
+   709→                            <p className="text-xs font-medium">{stock.price}</p>
+   710→                            <p
+   711→                              className={`text-[10px] font-semibold ${
+   712→                                stock.pnl.startsWith('+')
+   713→                                  ? 'text-emerald-600 dark:text-emerald-400'
+   714→                                  : 'text-red-600 dark:text-red-400'
+   715→                              }`}
+   716→                            >
+   717→                              {stock.pnl}
+   718→                            </p>
+   719→                          </div>
+   720→                        </div>
+   721→                      ))}
+   722→                    </div>
+   723→                  </div>
+   724→                </div>
+   725→
+   726→                {/* Bottom bar */}
+   727→                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+   728→                  {[
+   729→                    { icon: BarChart3, label: 'EGX 30', value: '24,580', up: true },
+   730→                    { icon: Gem, label: 'Gold 21K/g', value: 'EGP 2,980', up: true },
+   731→                    { icon: DollarSign, label: 'USD/EGP', value: '48.50', up: false },
+   732→                    { icon: Activity, label: 'Market', value: 'Open', badge: true },
+   733→                  ].map((item) => (
+   734→                    <div key={item.label} className="rounded-lg border bg-muted/20 p-3 flex items-center gap-3">
+   735→                      <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center flex-shrink-0">
+   736→                        <item.icon className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+   737→                      </div>
+   738→                      <div className="min-w-0">
+   739→                        <p className="text-[10px] text-muted-foreground font-medium">{item.label}</p>
+   740→                        <p className="text-xs font-bold truncate">{item.value}</p>
+   741→                      </div>
+   742→                    </div>
+   743→                  ))}
+   744→                </div>
+   745→              </div>
+   746→            </div>
+   747→          </div>
+   748→        </FadeIn>
+   749→      </div>
+   750→    </section>
+   751→  );
+   752→}
+   753→
+   754→// ── Testimonials Section ───────────────────────────────────────
+   755→
+   756→const testimonials = [
+   757→  {
+   758→    name: 'أحمد محمود',
+   759→    role: 'Day Trader, Cairo',
+   760→    rating: 5,
+   761→    text: 'Best Egyptian stock tracker I\'ve used. The real-time gold prices and USD/EGP rates make it my go-to platform for daily trading decisions.',
+   762→    initials: 'أم',
+   763→  },
+   764→  {
+   765→    name: 'سارة حسن',
+   766→    role: 'Long-term Investor, Alexandria',
+   767→    rating: 5,
+   768→    text: 'Finally a portfolio manager that understands the Egyptian market. The technical analysis tools are incredibly helpful for my investment strategy.',
+   769→    initials: 'سح',
+   770→  },
+   771→  {
+   772→    name: 'محمد علي',
+   773→    role: 'Portfolio Manager, Giza',
+   774→    rating: 5,
+   775→    text: 'The live data and clean interface set this apart from everything else. I track all my EGX holdings and gold positions in one place. Highly recommended.',
+   776→    initials: 'مع',
+   777→  },
+   778→];
+   779→
+   780→function StarRating({ rating }: { rating: number }) {
+   781→  return (
+   782→    <div className="flex gap-0.5">
+   783→      {Array.from({ length: 5 }).map((_, i) => (
+   784→        <Star
+   785→          key={i}
+   786→          className={`w-4 h-4 ${
+   787→            i < rating
+   788→              ? 'fill-amber-400 text-amber-400'
+   789→              : 'fill-muted text-muted'
+   790→          }`}
+   791→        />
+   792→      ))}
+   793→    </div>
+   794→  );
+   795→}
+   796→
+   797→function TestimonialsSection() {
+   798→  return (
+   799→    <section className="py-20 sm:py-24 bg-muted/30">
+   800→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+   801→        <FadeIn className="text-center max-w-3xl mx-auto mb-16">
+   802→          <Badge variant="secondary" className="mb-4">
+   803→            <Users className="w-3.5 h-3.5 mr-1.5" />
+   804→            Testimonials
+   805→          </Badge>
+   806→          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight">
+   807→            Trusted by{' '}
+   808→            <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 dark:from-emerald-400 dark:to-emerald-300 bg-clip-text text-transparent">
+   809→              Egyptian Investors
+   810→            </span>
+   811→          </h2>
+   812→          <p className="mt-4 text-lg text-muted-foreground">
+   813→            Join thousands of investors who track their portfolios with EGX Portfolio.
+   814→          </p>
+   815→        </FadeIn>
+   816→
+   817→        <StaggerContainer className="grid grid-cols-1 md:grid-cols-3 gap-6">
+   818→          {testimonials.map((t) => (
+   819→            <motion.div key={t.name} variants={staggerItem}>
+   820→              <Card className="h-full hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300 hover:-translate-y-1">
+   821→                <CardContent className="pt-6 flex flex-col h-full">
+   822→                  <Quote className="w-8 h-8 text-emerald-200 dark:text-emerald-800 mb-4 flex-shrink-0" />
+   823→                  <StarRating rating={t.rating} />
+   824→                  <p className="mt-4 text-sm leading-relaxed text-muted-foreground flex-1">
+   825→                    &ldquo;{t.text}&rdquo;
+   826→                  </p>
+   827→                  <Separator className="my-4" />
+   828→                  <div className="flex items-center gap-3">
+   829→                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center text-white text-sm font-bold">
+   830→                      {t.initials}
+   831→                    </div>
+   832→                    <div>
+   833→                      <p className="text-sm font-semibold" dir="rtl" lang="ar">{t.name}</p>
+   834→                      <p className="text-xs text-muted-foreground">{t.role}</p>
+   835→                    </div>
+   836→                  </div>
+   837→                </CardContent>
+   838→              </Card>
+   839→            </motion.div>
+   840→          ))}
+   841→        </StaggerContainer>
+   842→      </div>
+   843→    </section>
+   844→  );
+   845→}
+   846→
+   847→// ── Pricing Section ────────────────────────────────────────────
+   848→
+   849→const pricingPlans = [
+   850→  {
+   851→    name: 'Free',
+   852→    price: 'EGP 0',
+   853→    period: 'forever',
+   854→    description: 'Perfect for getting started with Egyptian market tracking.',
+   855→    featured: false,
+   856→    cta: 'Get Started Free',
+   857→    features: [
+   858→      { text: 'Portfolio tracking', included: true },
+   859→      { text: 'Real-time stock prices', included: true },
+   860→      { text: 'Gold price tracking', included: true },
+   861→      { text: 'USD/EGP live rates', included: true },
+   862→      { text: 'Basic analysis', included: true },
+   863→      { text: 'Technical indicators', included: true },
+   864→      { text: 'AI insights', included: false },
+   865→      { text: 'Price alerts', included: false },
+   866→      { text: 'Advanced charts', included: false },
+   867→      { text: 'Priority support', included: false },
+   868→      { text: 'Watchlists', included: false },
+   869→    ],
+   870→  },
+   871→  {
+   872→    name: 'Pro',
+   873→    price: 'EGP 99',
+   874→    period: '/month',
+   875→    description: 'For serious investors who want the full edge.',
+   876→    featured: true,
+   877→    cta: 'Coming Soon',
+   878→    features: [
+   879→      { text: 'Portfolio tracking', included: true },
+   880→      { text: 'Real-time stock prices', included: true },
+   881→      { text: 'Gold price tracking', included: true },
+   882→      { text: 'USD/EGP live rates', included: true },
+   883→      { text: 'Basic analysis', included: true },
+   884→      { text: 'Technical indicators', included: true },
+   885→      { text: 'AI insights', included: true },
+   886→      { text: 'Price alerts', included: true },
+   887→      { text: 'Advanced charts', included: true },
+   888→      { text: 'Priority support', included: true },
+   889→      { text: 'Watchlists', included: true },
+   890→    ],
+   891→  },
+   892→];
+   893→
+   894→function PricingSection() {
+   895→  return (
+   896→    <section id="pricing" className="py-20 sm:py-24">
+   897→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+   898→        <FadeIn className="text-center max-w-3xl mx-auto mb-16">
+   899→          <Badge variant="secondary" className="mb-4">
+   900→            <Shield className="w-3.5 h-3.5 mr-1.5" />
+   901→            Pricing
+   902→          </Badge>
+   903→          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight">
+   904→            Simple,{' '}
+   905→            <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 dark:from-emerald-400 dark:to-emerald-300 bg-clip-text text-transparent">
+   906→              Transparent
+   907→            </span>{' '}
+   908→            Pricing
+   909→          </h2>
+   910→          <p className="mt-4 text-lg text-muted-foreground">
+   911→            Start free and upgrade when you need advanced features.
+   912→          </p>
+   913→        </FadeIn>
+   914→
+   915→        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+   916→          {pricingPlans.map((plan, i) => (
+   917→            <FadeIn key={plan.name} delay={i * 0.15}>
+   918→              <Card
+   919→                className={`h-full relative overflow-hidden ${
+   920→                  plan.featured
+   921→                    ? 'border-emerald-300 dark:border-emerald-700 shadow-xl shadow-emerald-600/10'
+   922→                    : ''
+   923→                }`}
+   924→              >
+   925→                {plan.featured && (
+   926→                  <div className="absolute top-0 right-0 bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">
+   927→                    Most Popular
+   928→                  </div>
+   929→                )}
+   930→                <CardHeader>
+   931→                  <CardTitle className="text-xl">{plan.name}</CardTitle>
+   932→                  <CardDescription>{plan.description}</CardDescription>
+   933→                  <div className="mt-4">
+   934→                    <span className="text-4xl font-bold">{plan.price}</span>
+   935→                    <span className="text-muted-foreground text-sm ml-1">{plan.period}</span>
+   936→                  </div>
+   937→                </CardHeader>
+   938→                <CardContent className="flex flex-col flex-1">
+   939→                  <div className="space-y-3 flex-1">
+   940→                    {plan.features.map((feature) => (
+   941→                      <div key={feature.text} className="flex items-center gap-3">
+   942→                        {feature.included ? (
+   943→                          <div className="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center flex-shrink-0">
+   944→                            <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+   945→                          </div>
+   946→                        ) : (
+   947→                          <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
+   948→                            <X className="w-3 h-3 text-muted-foreground" />
+   949→                          </div>
+   950→                        )}
+   951→                        <span
+   952→                          className={`text-sm ${
+   953→                            feature.included ? 'text-foreground' : 'text-muted-foreground'
+   954→                          }`}
+   955→                        >
+   956→                          {feature.text}
+   957→                        </span>
+   958→                        {!feature.included && plan.name === 'Pro' && (
+   959→                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 ml-auto">
+   960→                            Soon
+   961→                          </Badge>
+   962→                        )}
+   963→                      </div>
+   964→                    ))}
+   965→                  </div>
+   966→
+   967→                  <Button
+   968→                    className={`w-full mt-6 h-11 ${
+   969→                      plan.featured
+   970→                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/25'
+   971→                        : ''
+   972→                    }`}
+   973→                    variant={plan.featured ? 'default' : 'outline'}
+   974→                    asChild={!plan.featured}
+   975→                  >
+   976→                    {plan.featured ? (
+   977→                      plan.cta
+   978→                    ) : (
+   979→                      <Link href="/dashboard">{plan.cta}</Link>
+   980→                    )}
+   981→                  </Button>
+   982→                </CardContent>
+   983→              </Card>
+   984→            </FadeIn>
+   985→          ))}
+   986→        </div>
+   987→      </div>
+   988→    </section>
+   989→  );
+   990→}
+   991→
+   992→// ── FAQ Section ────────────────────────────────────────────────
+   993→
+   994→const faqs = [
+   995→  {
+   996→    question: 'Is the platform free?',
+   997→    answer:
+   998→      'Yes! The core platform is completely free to use. You get portfolio tracking, real-time stock prices, gold tracking, USD/EGP rates, and basic technical analysis — all at no cost. We also offer a Pro plan with advanced features coming soon.',
+   999→  },
+  1000→  {
+  1001→    question: 'Which markets are supported?',
+  1002→    answer:
+  1003→      'We support the Egyptian Exchange (EGX) with 220+ stocks across all sectors. Additionally, we track gold prices (24K, 21K, 18K in EGP) and the USD/EGP exchange rate. All data is sourced from official Egyptian market feeds.',
+  1004→  },
+  1005→  {
+  1006→    question: 'How often are prices updated?',
+  1007→    answer:
+  1008→      'Stock prices and indices are updated every 5 seconds during EGX trading hours (Sunday–Thursday, 9:30 AM – 3:00 PM Cairo time). Gold and forex data is refreshed every 60 seconds, available 24/7.',
+  1009→  },
+  1010→  {
+  1011→    question: 'Is my data secure?',
+  1012→    answer:
+  1013→      'Absolutely. Your portfolio data is stored locally on your device using localStorage. No financial data is sent to external servers beyond what is needed to fetch market data. We never share your information with third parties.',
+  1014→  },
+  1015→  {
+  1016→    question: 'Can I use it on mobile?',
+  1017→    answer:
+  1018→      'Yes! EGX Portfolio is fully responsive and works beautifully on any device — smartphones, tablets, laptops, and desktops. Simply open the website in your mobile browser for the best experience.',
+  1019→  },
+  1020→  {
+  1021→    question: 'Do you support paper trading?',
+  1022→    answer:
+  1023→      'Paper trading (simulated trading without real money) is on our roadmap for the Pro plan. You\'ll be able to practice strategies and test ideas risk-free with virtual cash and real market data.',
+  1024→  },
+  1025→];
+  1026→
+  1027→function FAQSection() {
+  1028→  return (
+  1029→    <section id="faq" className="py-20 sm:py-24 bg-muted/30">
+  1030→      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+  1031→        <FadeIn className="text-center mb-12">
+  1032→          <Badge variant="secondary" className="mb-4">
+  1033→            <Search className="w-3.5 h-3.5 mr-1.5" />
+  1034→            FAQ
+  1035→          </Badge>
+  1036→          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight">
+  1037→            Frequently Asked{' '}
+  1038→            <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 dark:from-emerald-400 dark:to-emerald-300 bg-clip-text text-transparent">
+  1039→              Questions
+  1040→            </span>
+  1041→          </h2>
+  1042→          <p className="mt-4 text-lg text-muted-foreground">
+  1043→            Everything you need to know about EGX Portfolio.
+  1044→          </p>
+  1045→        </FadeIn>
+  1046→
+  1047→        <FadeIn delay={0.2}>
+  1048→          <Accordion type="single" collapsible className="w-full">
+  1049→            {faqs.map((faq, i) => (
+  1050→              <AccordionItem key={i} value={`faq-${i}`}>
+  1051→                <AccordionTrigger className="text-left text-sm sm:text-base font-medium hover:no-underline">
+  1052→                  {faq.question}
+  1053→                </AccordionTrigger>
+  1054→                <AccordionContent className="text-sm text-muted-foreground leading-relaxed">
+  1055→                  {faq.answer}
+  1056→                </AccordionContent>
+  1057→              </AccordionItem>
+  1058→            ))}
+  1059→          </Accordion>
+  1060→        </FadeIn>
+  1061→      </div>
+  1062→    </section>
+  1063→  );
+  1064→}
+  1065→
+  1066→// ── CTA Section ────────────────────────────────────────────────
+  1067→
+  1068→function CTASection() {
+  1069→  return (
+  1070→    <section className="py-20 sm:py-24">
+  1071→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  1072→        <FadeIn>
+  1073→          <div className="relative rounded-2xl overflow-hidden">
+  1074→            {/* Background */}
+  1075→            <div className="absolute inset-0 bg-gradient-to-br from-emerald-600 to-emerald-800 dark:from-emerald-700 dark:to-emerald-950" />
+  1076→            <div className="absolute inset-0 opacity-10">
+  1077→              <div
+  1078→                style={{
+  1079→                  backgroundImage:
+  1080→                    'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
+  1081→                  backgroundSize: '24px 24px',
+  1082→                }}
+  1083→                className="absolute inset-0"
+  1084→              />
+  1085→            </div>
+  1086→
+  1087→            <div className="relative px-6 sm:px-12 py-16 sm:py-20 text-center">
+  1088→              <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight">
+  1089→                Ready to Start Tracking?
+  1090→              </h2>
+  1091→              <p
+  1092→                className="mt-4 text-lg text-emerald-100/80 max-w-xl mx-auto"
+  1093→                dir="rtl"
+  1094→                lang="ar"
+  1095→              >
+  1096→                ابدأ الآن مجاناً وتابع استثماراتك بذكاء
+  1097→              </p>
+  1098→              <p className="mt-2 text-base text-emerald-100/60 max-w-xl mx-auto">
+  1099→                Join thousands of Egyptian investors. No credit card required.
+  1100→              </p>
+  1101→              <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
+  1102→                <Button
+  1103→                  size="lg"
+  1104→                  className="bg-white text-emerald-700 hover:bg-emerald-50 shadow-xl h-12 px-8 text-base font-semibold"
+  1105→                  asChild
+  1106→                >
+  1107→                  <Link href="/dashboard">
+  1108→                    Get Started Free
+  1109→                    <ArrowRight className="ml-2 h-4 w-4" />
+  1110→                  </Link>
+  1111→                </Button>
+  1112→                <Button
+  1113→                  variant="outline"
+  1114→                  size="lg"
+  1115→                  className="h-12 px-8 text-base font-medium border-white/30 text-white hover:bg-white/10 hover:text-white"
+  1116→                  asChild
+  1117→                >
+  1118→                  <a href="#features">Learn More</a>
+  1119→                </Button>
+  1120→              </div>
+  1121→            </div>
+  1122→          </div>
+  1123→        </FadeIn>
+  1124→      </div>
+  1125→    </section>
+  1126→  );
+  1127→}
+  1128→
+  1129→// ── Footer ─────────────────────────────────────────────────────
+  1130→
+  1131→function Footer() {
+  1132→  const footerLinks = {
+  1133→    Product: [
+  1134→      { label: 'Features', href: '#features' },
+  1135→      { label: 'Pricing', href: '#pricing' },
+  1136→      { label: 'Live Demo', href: '#demo' },
+  1137→      { label: 'FAQ', href: '#faq' },
+  1138→    ],
+  1139→    Markets: [
+  1140→      { label: 'EGX Stocks', href: '#' },
+  1141→      { label: 'Gold Prices', href: '#' },
+  1142→      { label: 'USD/EGP Forex', href: '#' },
+  1143→      { label: 'Market Status', href: '#' },
+  1144→    ],
+  1145→    Company: [
+  1146→      { label: 'About', href: '#' },
+  1147→      { label: 'Blog', href: '#' },
+  1148→      { label: 'Contact', href: '#' },
+  1149→      { label: 'Privacy', href: '#' },
+  1150→    ],
+  1151→  };
+  1152→
+  1153→  return (
+  1154→    <footer className="border-t bg-muted/20">
+  1155→      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
+  1156→        <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
+  1157→          {/* Brand */}
+  1158→          <div className="col-span-2">
+  1159→            <Link href="/" className="flex items-center gap-2.5 mb-4">
+  1160→              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
+  1161→                <TrendingUp className="w-4 h-4 text-white" />
+  1162→              </div>
+  1163→              <span className="font-semibold text-lg tracking-tight">
+  1164→                EGX <span className="text-emerald-600 dark:text-emerald-400">Portfolio</span>
+  1165→              </span>
+  1166→            </Link>
+  1167→            <p className="text-sm text-muted-foreground max-w-xs leading-relaxed">
+  1168→              The most comprehensive Egyptian investment tracking platform. Monitor your EGX stocks,
+  1169→              gold, and forex in real-time.
+  1170→            </p>
+  1171→            <p className="mt-2 text-sm text-muted-foreground" dir="rtl" lang="ar">
+  1172→              منصة تتبع الاستثمارات المصرية الأكثر شمولاً
+  1173→            </p>
+  1174→          </div>
+  1175→
+  1176→          {/* Link columns */}
+  1177→          {Object.entries(footerLinks).map(([category, links]) => (
+  1178→            <div key={category}>
+  1179→              <h3 className="text-sm font-semibold mb-4">{category}</h3>
+  1180→              <ul className="space-y-2.5">
+  1181→                {links.map((link) => (
+  1182→                  <li key={link.label}>
+  1183→                    <a
+  1184→                      href={link.href}
+  1185→                      className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+  1186→                    >
+  1187→                      {link.label}
+  1188→                    </a>
+  1189→                  </li>
+  1190→                ))}
+  1191→              </ul>
+  1192→            </div>
+  1193→          ))}
+  1194→        </div>
+  1195→
+  1196→        <Separator className="my-8" />
+  1197→
+  1198→        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+  1199→          <p className="text-xs text-muted-foreground">
+  1200→            &copy; {new Date().getFullYear()} EGX Portfolio Tracker. All rights reserved.
+  1201→          </p>
+  1202→          <div className="flex items-center gap-4">
+  1203→            {/* Social icons as simple links */}
+  1204→            {['X', 'LinkedIn', 'GitHub'].map((social) => (
+  1205→              <a
+  1206→                key={social}
+  1207→                href="#"
+  1208→                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+  1209→              >
+  1210→                {social}
+  1211→              </a>
+  1212→            ))}
+  1213→          </div>
+  1214→        </div>
+  1215→      </div>
+  1216→    </footer>
+  1217→  );
+  1218→}
+  1219→
+  1220→// ── Main Page ──────────────────────────────────────────────────
+  1221→
+  1222→export default function MarketingPage() {
+  1223→  return (
+  1224→    <div className="min-h-screen flex flex-col">
+  1225→      <Navbar />
+  1226→      <main className="flex-1">
+  1227→        <HeroSection />
+  1228→        <FeaturesSection />
+  1229→        <HowItWorksSection />
+  1230→        <DemoPreviewSection />
+  1231→        <TestimonialsSection />
+  1232→        <PricingSection />
+  1233→        <FAQSection />
+  1234→        <CTASection />
+  1235→      </main>
+  1236→      <Footer />
+  1237→    </div>
+  1238→  );
+  1239→}
+  1240→

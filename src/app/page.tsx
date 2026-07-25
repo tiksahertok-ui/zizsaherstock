@@ -86,7 +86,6 @@ function AuthForm({ h }: { h: ReturnType<typeof useHoldings> }) {
                   placeholder="Enter your username"
                   value={h.loginUsername}
                   onChange={(e) => { h.setLoginUsername(e.target.value); h.setLoginError(''); }}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSubmit(e)}
                   autoComplete="username"
                 />
               </div>
@@ -101,7 +100,6 @@ function AuthForm({ h }: { h: ReturnType<typeof useHoldings> }) {
                     placeholder={h.isRegisterMode ? 'Choose a password (4+ chars)' : 'Enter your password'}
                     value={h.loginPassword}
                     onChange={(e) => { h.setLoginPassword(e.target.value); h.setLoginError(''); }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSubmit(e)}
                     className="pr-9"
                     autoComplete={h.isRegisterMode ? 'new-password' : 'current-password'}
                   />
@@ -123,7 +121,6 @@ function AuthForm({ h }: { h: ReturnType<typeof useHoldings> }) {
                     placeholder="Re-enter your password"
                     value={h.confirmPassword}
                     onChange={(e) => { h.setConfirmPassword(e.target.value); h.setLoginError(''); }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSubmit(e)}
                     autoComplete="new-password"
                   />
                 </div>

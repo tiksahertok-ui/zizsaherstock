@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { hashPassword, createSession } from '@/lib/auth';
+import { hashPassword, createSession, setSessionCookie } from '@/lib/auth';
 
 export async function POST(request: Request) {
   try {
@@ -49,13 +49,14 @@ export async function POST(request: Request) {
       },
     });
 
-    // Create session
-    await createSession(account.id);
-
-    return NextResponse.json({
+    // Create session and set cookie on response
+    const token = await createSession(account.id);
+    const response = NextResponse.json({
       success: true,
       account: { id: account.id, username: account.username },
     });
+    setSessionCookie(response, token);
+    return response;
   } catch (err) {
     console.error('Register error:', err);
     return NextResponse.json(
