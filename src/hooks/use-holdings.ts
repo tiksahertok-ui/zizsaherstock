@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -204,13 +204,16 @@ export function useHoldings(): UseHoldingsReturn {
   const [formTxDate, setFormTxDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [formTxNotes, setFormTxNotes] = useState('');
 
+  // Prevent double-fire of fetchHoldings
+  const authVerifiedRef = useRef(false);
+
   // ── Check session on mount ─────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
     async function checkSession() {
       try {
-        const res = await fetch('/api/auth/session');
+        const res = await fetch('/api/auth/session', { credentials: 'include' });
         if (cancelled) return;
 
         if (res.ok) {
@@ -218,6 +221,7 @@ export function useHoldings(): UseHoldingsReturn {
           if (data.authenticated && data.account) {
             setProfile({ id: data.account.id, username: data.account.username });
             setAuthenticated(true);
+            authVerifiedRef.current = true;
           }
         }
       } catch {
@@ -235,13 +239,17 @@ export function useHoldings(): UseHoldingsReturn {
   const fetchHoldings = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/holdings');
+      const res = await fetch('/api/holdings', { credentials: 'include' });
       if (!res.ok) {
         if (res.status === 401) {
-          // Session expired — clear auth state
-          setProfile(null);
-          setAuthenticated(false);
-          setHoldings([]);
+          // Session might have expired — verify once before logging out
+          const sessionRes = await fetch('/api/auth/session', { credentials: 'include' });
+          if (!sessionRes.ok) {
+            setProfile(null);
+            setAuthenticated(false);
+            authVerifiedRef.current = false;
+            setHoldings([]);
+          }
           return;
         }
         throw new Error('Failed to fetch holdings');
@@ -257,12 +265,31 @@ export function useHoldings(): UseHoldingsReturn {
     }
   }, []);
 
-  // Auto-fetch when authenticated
+  // Auto-fetch when authenticated (only after session is verified)
   useEffect(() => {
-    if (authenticated) {
+    if (authenticated && authVerifiedRef.current) {
       fetchHoldings();
     }
   }, [authenticated, fetchHoldings]);
+
+  // ── Verify session after login/register ───────────────────────
+  const verifyAndSetAuth = useCallback(async (): Promise<boolean> => {
+    try {
+      const sessionRes = await fetch('/api/auth/session', { credentials: 'include' });
+      if (sessionRes.ok) {
+        const sessionData = await sessionRes.json();
+        if (sessionData.authenticated && sessionData.account) {
+          setProfile({ id: sessionData.account.id, username: sessionData.account.username });
+          setAuthenticated(true);
+          authVerifiedRef.current = true;
+          return true;
+        }
+      }
+    } catch {
+      // Session verification failed
+    }
+    return false;
+  }, []);
 
   // ── Login ──────────────────────────────────────────────────────
   const handleLogin = useCallback(async () => {
@@ -273,6 +300,7 @@ export function useHoldings(): UseHoldingsReturn {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           username: loginUsername.trim(),
           password: loginPassword,
@@ -286,19 +314,23 @@ export function useHoldings(): UseHoldingsReturn {
         return;
       }
 
-      if (data.success && data.account) {
-        setProfile({ id: data.account.id, username: data.account.username });
-        setAuthenticated(true);
-        setLoginUsername('');
-        setLoginPassword('');
-        toast.success(`Welcome back, ${data.account.username}!`);
+      if (data.success) {
+        // Verify the session cookie was actually set before considering user logged in
+        const verified = await verifyAndSetAuth();
+        if (verified) {
+          setLoginUsername('');
+          setLoginPassword('');
+          toast.success(`Welcome back, ${data.account?.username || ''}!`);
+        } else {
+          setLoginError('Login succeeded but session could not be established. Please try again.');
+        }
       }
     } catch {
       setLoginError('Network error. Please try again.');
     } finally {
       setAuthLoading(false);
     }
-  }, [loginUsername, loginPassword]);
+  }, [loginUsername, loginPassword, verifyAndSetAuth]);
 
   // ── Register ──────────────────────────────────────────────────
   const handleRegister = useCallback(async () => {
@@ -309,6 +341,7 @@ export function useHoldings(): UseHoldingsReturn {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           username: loginUsername.trim(),
           password: loginPassword,
@@ -322,31 +355,36 @@ export function useHoldings(): UseHoldingsReturn {
         return;
       }
 
-      if (data.success && data.account) {
-        setProfile({ id: data.account.id, username: data.account.username });
-        setAuthenticated(true);
-        setLoginUsername('');
-        setLoginPassword('');
-        setConfirmPassword('');
-        setIsRegisterMode(false);
-        toast.success(`Account created! Welcome, ${data.account.username}!`);
+      if (data.success) {
+        // Verify the session cookie was actually set
+        const verified = await verifyAndSetAuth();
+        if (verified) {
+          setLoginUsername('');
+          setLoginPassword('');
+          setConfirmPassword('');
+          setIsRegisterMode(false);
+          toast.success(`Account created! Welcome, ${data.account?.username || ''}!`);
+        } else {
+          setLoginError('Registration succeeded but session could not be established. Please try again.');
+        }
       }
     } catch {
       setLoginError('Network error. Please try again.');
     } finally {
       setAuthLoading(false);
     }
-  }, [loginUsername, loginPassword]);
+  }, [loginUsername, loginPassword, verifyAndSetAuth]);
 
   // ── Logout ─────────────────────────────────────────────────────
   const handleLogout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     } catch {
       // Best-effort
     } finally {
       setProfile(null);
       setAuthenticated(false);
+      authVerifiedRef.current = false;
       setHoldings([]);
       setAddDialogOpen(false);
       setEditDialogOpen(false);
@@ -408,6 +446,7 @@ export function useHoldings(): UseHoldingsReturn {
       const res = await fetch('/api/holdings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           symbol: selectedStock.symbol,
           name: selectedStock.name,
@@ -430,7 +469,6 @@ export function useHoldings(): UseHoldingsReturn {
         return;
       }
 
-      // Add to local state (optimistically with DB response)
       const newHolding = toStoredHolding(data);
       setHoldings((prev) => [newHolding, ...prev]);
       setAddDialogOpen(false);
@@ -456,6 +494,7 @@ export function useHoldings(): UseHoldingsReturn {
       const res = await fetch(`/api/holdings/${selectedHolding.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           shares,
           avgCost,
@@ -470,7 +509,6 @@ export function useHoldings(): UseHoldingsReturn {
         return;
       }
 
-      // Update local state
       setHoldings((prev) =>
         prev.map((h) => {
           if (h.id !== selectedHolding.id) return h;
@@ -496,6 +534,7 @@ export function useHoldings(): UseHoldingsReturn {
     try {
       const res = await fetch(`/api/holdings/${selectedHolding.id}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
 
       const data = await res.json();
@@ -533,6 +572,7 @@ export function useHoldings(): UseHoldingsReturn {
       const res = await fetch(`/api/holdings/${selectedHolding.id}/transactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           type: formTxType,
           shares,
@@ -549,7 +589,6 @@ export function useHoldings(): UseHoldingsReturn {
         return;
       }
 
-      // The backend already updated holding shares/avgCost — re-fetch for consistency
       await fetchHoldings();
 
       setTxDialogOpen(false);
@@ -565,10 +604,9 @@ export function useHoldings(): UseHoldingsReturn {
   const fetchTransactions = useCallback(
     async (holdingId: string) => {
       try {
-        const res = await fetch(`/api/holdings/${holdingId}`);
+        const res = await fetch(`/api/holdings/${holdingId}`, { credentials: 'include' });
         if (!res.ok) return;
         const data = await res.json();
-        // Merge updated data into local holdings state
         setHoldings((prev) =>
           prev.map((h) => {
             if (h.id !== holdingId) return h;
