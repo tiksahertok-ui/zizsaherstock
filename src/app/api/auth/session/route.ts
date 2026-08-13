@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
       token: session.token,
       account: {
         id: session.account.id,
-        username: session.account.username,
+        email: session.account.email,
       },
     });
   } catch (err) {

@@ -4,37 +4,38 @@ import { hashPassword, createSession, setSessionCookie } from '@/lib/auth';
 
 export async function POST(request: Request) {
   try {
-    const { username, password } = await request.json();
+    const { email, password } = await request.json();
 
-    if (!username || !password) {
+    if (!email || !password) {
       return NextResponse.json(
-        { error: 'Username and password are required' },
+        { error: 'Email and password are required' },
         { status: 400 }
       );
     }
 
-    const trimmed = username.trim();
-    if (trimmed.length < 2) {
+    const trimmed = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmed)) {
       return NextResponse.json(
-        { error: 'Username must be at least 2 characters' },
+        { error: 'Please enter a valid email address' },
         { status: 400 }
       );
     }
 
-    if (password.length < 4) {
+    if (password.length < 6) {
       return NextResponse.json(
-        { error: 'Password must be at least 4 characters' },
+        { error: 'Password must be at least 6 characters' },
         { status: 400 }
       );
     }
 
     const existing = await prisma.account.findUnique({
-      where: { username: trimmed.toLowerCase() },
+      where: { email: trimmed },
     });
 
     if (existing) {
       return NextResponse.json(
-        { error: 'Username already taken' },
+        { error: 'An account with this email already exists' },
         { status: 409 }
       );
     }
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
     const hashedPassword = hashPassword(password);
     const account = await prisma.account.create({
       data: {
-        username: trimmed.toLowerCase(),
+        email: trimmed,
         password: hashedPassword,
       },
     });
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
     const response = NextResponse.json({
       success: true,
       token,
-      account: { id: account.id, username: account.username },
+      account: { id: account.id, email: account.email },
     });
     setSessionCookie(response, token);
     return response;

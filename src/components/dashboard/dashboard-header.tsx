@@ -8,7 +8,7 @@ import {
   Sun,
   Moon,
   LogOut,
-  User,
+  Mail,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import { Separator } from '@/components/ui/separator';
 
 type Profile = {
   id: string;
-  username: string;
+  email: string;
 };
 
 interface DashboardHeaderProps {
@@ -39,7 +39,6 @@ export function DashboardHeader({
   return (
     <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-xl">
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 max-w-[1600px] mx-auto">
-        {/* Logo */}
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-sm">
             <CandlestickChart className="w-4 h-4 text-white" />
@@ -49,20 +48,17 @@ export function DashboardHeader({
           </span>
         </div>
 
-        {/* User info & actions */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Profile badge */}
           {profile && (
             <>
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/60 border text-sm">
-                <User className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span className="font-medium">{profile.username}</span>
+                <Mail className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span className="font-medium truncate max-w-[180px]">{profile.email}</span>
               </div>
               <Separator orientation="vertical" className="hidden sm:block h-6" />
             </>
           )}
 
-          {/* Theme toggle */}
           <Button
             variant="ghost"
             size="icon"
@@ -74,7 +70,6 @@ export function DashboardHeader({
             <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
           </Button>
 
-          {/* Refresh */}
           <Button
             variant="ghost"
             size="icon"
@@ -86,7 +81,6 @@ export function DashboardHeader({
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           </Button>
 
-          {/* Add position */}
           {profile && (
             <Button
               size="sm"
@@ -98,7 +92,6 @@ export function DashboardHeader({
             </Button>
           )}
 
-          {/* Logout */}
           {profile && (
             <Button
               variant="ghost"

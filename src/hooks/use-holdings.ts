@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -8,12 +8,11 @@ import type {
   Holding, Transaction, StoredHolding,
   StockOption, PortfolioSummary, SortField, SortDir,
 } from '@/types';
-import { enrichHolding } from '@/utils/formatters';
 
 // ── Profile type ──────────────────────────────────────────────
 export interface Profile {
   id: string;
-  username: string;
+  email: string;
 }
 
 // ── DB response shape ─────────────────────────────────────────
@@ -77,8 +76,8 @@ export interface UseHoldingsReturn {
   hydrated: boolean;
   isRegisterMode: boolean;
   setIsRegisterMode: (v: boolean) => void;
-  loginUsername: string;
-  setLoginUsername: (v: string) => void;
+  loginEmail: string;
+  setLoginEmail: (v: string) => void;
   loginPassword: string;
   setLoginPassword: (v: string) => void;
   confirmPassword: string;
@@ -148,7 +147,7 @@ export function useHoldings(): UseHoldingsReturn {
   const [authLoading, setAuthLoading] = useState(false);
 
   const [isRegisterMode, setIsRegisterMode] = useState(false);
-  const [loginUsername, setLoginUsername] = useState('');
+  const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -183,15 +182,12 @@ export function useHoldings(): UseHoldingsReturn {
     const token = loadToken();
     const headers = new Headers(options.headers || {});
     if (token) {
-      // Method 1: Standard Authorization header
       headers.set('Authorization', `Bearer ${token}`);
-      // Method 2: Custom header (survives most proxies)
       headers.set('X-Auth-Token', token);
     }
     if (!headers.has('Content-Type') && options.body) {
       headers.set('Content-Type', 'application/json');
     }
-    // Method 3: Query parameter (last resort, works through ANY proxy)
     let finalUrl = url;
     if (token) {
       const separator = url.includes('?') ? '&' : '?';
@@ -200,21 +196,18 @@ export function useHoldings(): UseHoldingsReturn {
     return fetch(finalUrl, { ...options, headers, credentials: 'include' });
   }, []);
 
-  // ── Check session on mount (also restores from localStorage) ─
+  // ── Check session on mount ─
   useEffect(() => {
     let cancelled = false;
-
     async function checkSession() {
       try {
         const res = await authFetch('/api/auth/session');
         if (cancelled) return;
-
         if (res.ok) {
           const data = await res.json();
           if (data.authenticated && data.account) {
-            // Update stored token if server returned a fresh one
             if (data.token) saveToken(data.token);
-            setProfile({ id: data.account.id, username: data.account.username });
+            setProfile({ id: data.account.id, email: data.account.email });
             setAuthenticated(true);
           }
         }
@@ -224,7 +217,6 @@ export function useHoldings(): UseHoldingsReturn {
         if (!cancelled) setHydrated(true);
       }
     }
-
     checkSession();
     return () => { cancelled = true; };
   }, [authFetch]);
@@ -236,7 +228,6 @@ export function useHoldings(): UseHoldingsReturn {
       const res = await authFetch('/api/holdings');
       if (!res.ok) {
         if (res.status === 401) {
-          // Double-check session
           const sessionRes = await authFetch('/api/auth/session');
           if (!sessionRes.ok) {
             setProfile(null);
@@ -266,33 +257,27 @@ export function useHoldings(): UseHoldingsReturn {
   const handleLogin = useCallback(async () => {
     setLoginError('');
     setAuthLoading(true);
-
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          username: loginUsername.trim(),
-          password: loginPassword,
-        }),
+        body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
       });
-
       if (!res.ok) {
         let msg = 'Login failed';
         try { const d = await res.json(); msg = d.detail ? `${d.error}: ${d.detail}` : (d.error || msg); } catch {}
         setLoginError(`${msg} (${res.status})`);
         return;
       }
-
       const data = await res.json();
       if (data.success && data.token) {
         saveToken(data.token);
-        setProfile({ id: data.account.id, username: data.account.username });
+        setProfile({ id: data.account.id, email: data.account.email });
         setAuthenticated(true);
-        setLoginUsername('');
+        setLoginEmail('');
         setLoginPassword('');
-        toast.success(`Welcome back, ${data.account.username}!`);
+        toast.success('Welcome back!');
       } else {
         setLoginError('Unexpected response from server');
       }
@@ -302,41 +287,35 @@ export function useHoldings(): UseHoldingsReturn {
     } finally {
       setAuthLoading(false);
     }
-  }, [loginUsername, loginPassword]);
+  }, [loginEmail, loginPassword]);
 
   // ── Register ────────────────────────────────────────────────
   const handleRegister = useCallback(async () => {
     setLoginError('');
     setAuthLoading(true);
-
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          username: loginUsername.trim(),
-          password: loginPassword,
-        }),
+        body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
       });
-
       if (!res.ok) {
         let msg = 'Registration failed';
         try { const d = await res.json(); msg = d.detail ? `${d.error}: ${d.detail}` : (d.error || msg); } catch {}
         setLoginError(`${msg} (${res.status})`);
         return;
       }
-
       const data = await res.json();
       if (data.success && data.token) {
         saveToken(data.token);
-        setProfile({ id: data.account.id, username: data.account.username });
+        setProfile({ id: data.account.id, email: data.account.email });
         setAuthenticated(true);
-        setLoginUsername('');
+        setLoginEmail('');
         setLoginPassword('');
         setConfirmPassword('');
         setIsRegisterMode(false);
-        toast.success(`Account created! Welcome, ${data.account.username}!`);
+        toast.success('Account created successfully!');
       } else {
         setLoginError('Unexpected response from server');
       }
@@ -346,7 +325,7 @@ export function useHoldings(): UseHoldingsReturn {
     } finally {
       setAuthLoading(false);
     }
-  }, [loginUsername, loginPassword]);
+  }, [loginEmail, loginPassword]);
 
   // ── Logout ──────────────────────────────────────────────────
   const handleLogout = useCallback(async () => {
@@ -545,7 +524,7 @@ export function useHoldings(): UseHoldingsReturn {
   // ── Return ──────────────────────────────────────────────────
   return {
     profile, authenticated, hydrated, isRegisterMode, setIsRegisterMode,
-    loginUsername, setLoginUsername, loginPassword, setLoginPassword,
+    loginEmail, setLoginEmail, loginPassword, setLoginPassword,
     confirmPassword, setConfirmPassword, loginError, setLoginError, authLoading,
     handleLogin, handleRegister, handleLogout,
     holdings, setHoldings, loading, fetchHoldings,
