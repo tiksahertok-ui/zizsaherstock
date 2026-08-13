@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { verifyPassword, createSession, setSessionCookie } from '@/lib/auth';
+import { verifyPassword, setSessionCookie } from '@/lib/auth';
 
 export async function POST(request: Request) {
   try {
@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     if (!email || !password) {
       return NextResponse.json(
         { error: 'Email and password are required' },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -17,24 +17,25 @@ export async function POST(request: Request) {
       where: { email: email.trim().toLowerCase() },
     });
 
-    if (!account) {
+    if (!account || !verifyPassword(password, account.password)) {
       return NextResponse.json(
         { error: 'Invalid email or password' },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
-    if (!verifyPassword(password, account.password)) {
-      return NextResponse.json(
-        { error: 'Invalid email or password' },
-        { status: 401 }
-      );
-    }
+    // Delete old sessions & create new one
+    await prisma.session.deleteMany({ where: { accountId: account.id } });
+    const token = crypto.randomUUID();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
 
-    const token = await createSession(account.id);
+    await prisma.session.create({
+      data: { token, accountId: account.id, expiresAt },
+    });
+
     const response = NextResponse.json({
       success: true,
-      token,
       account: { id: account.id, email: account.email },
     });
     setSessionCookie(response, token);
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
     console.error('Login error:', err);
     return NextResponse.json(
       { error: 'Login failed', detail: message },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

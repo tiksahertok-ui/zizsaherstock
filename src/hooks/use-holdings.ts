@@ -54,19 +54,16 @@ function toStoredHolding(db: DbHolding): StoredHolding {
   };
 }
 
-// ── Token storage (survives proxy issues) ─────────────────────
-const TOKEN_KEY = 'egx-auth-token';
-
-function saveToken(token: string) {
-  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* noop */ }
-}
-
-function loadToken(): string | null {
-  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
-}
-
-function clearToken() {
-  try { localStorage.removeItem(TOKEN_KEY); } catch { /* noop */ }
+// ── Simple fetch helper (cookies sent automatically via credentials: 'include') ─
+async function apiFetch<T = unknown>(url: string, options: RequestInit = {}): Promise<{ ok: boolean; status: number; data: T }> {
+  const headers = new Headers(options.headers || {});
+  if (!headers.has('Content-Type') && options.body) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const res = await fetch(url, { ...options, headers, credentials: 'include' });
+  let data: T;
+  try { data = await res.json(); } catch { data = undefined as T; }
+  return { ok: res.ok, status: res.status, data };
 }
 
 // ── Return type ───────────────────────────────────────────────
@@ -177,39 +174,16 @@ export function useHoldings(): UseHoldingsReturn {
   const [formTxDate, setFormTxDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [formTxNotes, setFormTxNotes] = useState('');
 
-  // ── Authenticated fetch helper (sends token 3 ways for proxy resilience) ─────────
-  const authFetch = useCallback((url: string, options: RequestInit = {}) => {
-    const token = loadToken();
-    const headers = new Headers(options.headers || {});
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-      headers.set('X-Auth-Token', token);
-    }
-    if (!headers.has('Content-Type') && options.body) {
-      headers.set('Content-Type', 'application/json');
-    }
-    let finalUrl = url;
-    if (token) {
-      const separator = url.includes('?') ? '&' : '?';
-      finalUrl = `${url}${separator}_t=${encodeURIComponent(token)}`;
-    }
-    return fetch(finalUrl, { ...options, headers, credentials: 'include' });
-  }, []);
-
-  // ── Check session on mount ─
+  // ── Check session on mount (cookie-based) ──
   useEffect(() => {
     let cancelled = false;
     async function checkSession() {
       try {
-        const res = await authFetch('/api/auth/session');
+        const { ok, data } = await apiFetch<{ authenticated: boolean; account?: { id: string; email: string } }>('/api/auth/session');
         if (cancelled) return;
-        if (res.ok) {
-          const data = await res.json();
-          if (data.authenticated && data.account) {
-            if (data.token) saveToken(data.token);
-            setProfile({ id: data.account.id, email: data.account.email });
-            setAuthenticated(true);
-          }
+        if (ok && data.authenticated && data.account) {
+          setProfile({ id: data.account.id, email: data.account.email });
+          setAuthenticated(true);
         }
       } catch {
         // Not authenticated
@@ -219,35 +193,29 @@ export function useHoldings(): UseHoldingsReturn {
     }
     checkSession();
     return () => { cancelled = true; };
-  }, [authFetch]);
+  }, []);
 
   // ── Fetch holdings ──────────────────────────────────────────
   const fetchHoldings = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await authFetch('/api/holdings');
-      if (!res.ok) {
-        if (res.status === 401) {
-          const sessionRes = await authFetch('/api/auth/session');
-          if (!sessionRes.ok) {
-            setProfile(null);
-            setAuthenticated(false);
-            clearToken();
-            setHoldings([]);
-          }
-          return;
+      const { ok, status, data } = await apiFetch<{ holdings?: DbHolding[] }>('/api/holdings');
+      if (!ok) {
+        if (status === 401) {
+          setProfile(null);
+          setAuthenticated(false);
+          setHoldings([]);
         }
-        throw new Error('Failed to fetch holdings');
+        return;
       }
-      const data = await res.json();
-      setHoldings((data.holdings ?? []).map(toStoredHolding));
+      setHoldings(((data as { holdings?: DbHolding[] }).holdings ?? []).map(toStoredHolding));
     } catch (err) {
       console.error('fetchHoldings error:', err);
       toast.error('Failed to load holdings');
     } finally {
       setLoading(false);
     }
-  }, [authFetch]);
+  }, []);
 
   useEffect(() => {
     if (authenticated) fetchHoldings();
@@ -258,22 +226,19 @@ export function useHoldings(): UseHoldingsReturn {
     setLoginError('');
     setAuthLoading(true);
     try {
-      const res = await fetch('/api/auth/login', {
+      const { ok, status, data } = await apiFetch<{ success?: boolean; account?: { id: string; email: string }; error?: string; detail?: string }>('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
       });
-      if (!res.ok) {
-        let msg = 'Login failed';
-        try { const d = await res.json(); msg = d.detail ? `${d.error}: ${d.detail}` : (d.error || msg); } catch {}
-        setLoginError(`${msg} (${res.status})`);
+      if (!ok) {
+        const d = data as { error?: string; detail?: string };
+        const msg = d?.detail ? `${d.error}: ${d.detail}` : (d?.error || 'Login failed');
+        setLoginError(`${msg} (${status})`);
         return;
       }
-      const data = await res.json();
-      if (data.success && data.token) {
-        saveToken(data.token);
-        setProfile({ id: data.account.id, email: data.account.email });
+      const d = data as { success: boolean; account: { id: string; email: string } };
+      if (d.success && d.account) {
+        setProfile({ id: d.account.id, email: d.account.email });
         setAuthenticated(true);
         setLoginEmail('');
         setLoginPassword('');
@@ -282,7 +247,6 @@ export function useHoldings(): UseHoldingsReturn {
         setLoginError('Unexpected response from server');
       }
     } catch (err) {
-      console.error('Login error:', err);
       setLoginError(`Connection error: ${err instanceof Error ? err.message : 'Unknown'}`);
     } finally {
       setAuthLoading(false);
@@ -294,22 +258,19 @@ export function useHoldings(): UseHoldingsReturn {
     setLoginError('');
     setAuthLoading(true);
     try {
-      const res = await fetch('/api/auth/register', {
+      const { ok, status, data } = await apiFetch<{ success?: boolean; account?: { id: string; email: string }; error?: string; detail?: string }>('/api/auth/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
       });
-      if (!res.ok) {
-        let msg = 'Registration failed';
-        try { const d = await res.json(); msg = d.detail ? `${d.error}: ${d.detail}` : (d.error || msg); } catch {}
-        setLoginError(`${msg} (${res.status})`);
+      if (!ok) {
+        const d = data as { error?: string; detail?: string };
+        const msg = d?.detail ? `${d.error}: ${d.detail}` : (d?.error || 'Registration failed');
+        setLoginError(`${msg} (${status})`);
         return;
       }
-      const data = await res.json();
-      if (data.success && data.token) {
-        saveToken(data.token);
-        setProfile({ id: data.account.id, email: data.account.email });
+      const d = data as { success: boolean; account: { id: string; email: string } };
+      if (d.success && d.account) {
+        setProfile({ id: d.account.id, email: d.account.email });
         setAuthenticated(true);
         setLoginEmail('');
         setLoginPassword('');
@@ -320,7 +281,6 @@ export function useHoldings(): UseHoldingsReturn {
         setLoginError('Unexpected response from server');
       }
     } catch (err) {
-      console.error('Register error:', err);
       setLoginError(`Connection error: ${err instanceof Error ? err.message : 'Unknown'}`);
     } finally {
       setAuthLoading(false);
@@ -330,9 +290,8 @@ export function useHoldings(): UseHoldingsReturn {
   // ── Logout ──────────────────────────────────────────────────
   const handleLogout = useCallback(async () => {
     try {
-      await authFetch('/api/auth/logout', { method: 'POST' });
+      await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch { /* best-effort */ } finally {
-      clearToken();
       setProfile(null);
       setAuthenticated(false);
       setHoldings([]);
@@ -343,7 +302,7 @@ export function useHoldings(): UseHoldingsReturn {
       setSelectedHolding(null);
       toast.success('Logged out');
     }
-  }, [authFetch]);
+  }, []);
 
   // ── Sorting ─────────────────────────────────────────────────
   const sortedHoldings = useMemo(() => {
@@ -377,7 +336,7 @@ export function useHoldings(): UseHoldingsReturn {
     }
     const purchaseDate = formPurchaseDate || format(new Date(), 'yyyy-MM-dd');
     try {
-      const res = await authFetch('/api/holdings', {
+      const { ok, data } = await apiFetch<DbHolding>('/api/holdings', {
         method: 'POST',
         body: JSON.stringify({
           symbol: selectedStock.symbol, name: selectedStock.name,
@@ -385,13 +344,12 @@ export function useHoldings(): UseHoldingsReturn {
           transaction: { type: 'BUY', shares, price: avgCost, date: purchaseDate },
         }),
       });
-      const data = await res.json();
-      if (!res.ok) { toast.error(data.error || 'Failed to add holding'); return; }
-      setHoldings((prev) => [toStoredHolding(data), ...prev]);
+      if (!ok) { toast.error((data as { error?: string }).error || 'Failed to add holding'); return; }
+      setHoldings((prev) => [toStoredHolding(data as DbHolding), ...prev]);
       setAddDialogOpen(false); resetForm();
       toast.success(`Added ${selectedStock.symbol} to portfolio`);
     } catch { toast.error('Failed to add holding'); }
-  }, [selectedStock, formShares, formAvgCost, formPurchaseDate, authFetch]);
+  }, [selectedStock, formShares, formAvgCost, formPurchaseDate]);
 
   // ── Update holding ──────────────────────────────────────────
   const handleUpdateHolding = useCallback(async () => {
@@ -402,12 +360,11 @@ export function useHoldings(): UseHoldingsReturn {
       toast.error('Please enter valid shares and average cost'); return;
     }
     try {
-      const res = await authFetch(`/api/holdings/${selectedHolding.id}`, {
+      const { ok, data } = await apiFetch<DbHolding>(`/api/holdings/${selectedHolding.id}`, {
         method: 'PUT',
         body: JSON.stringify({ shares, avgCost, purchaseDate: formPurchaseDate || undefined }),
       });
-      const data = await res.json();
-      if (!res.ok) { toast.error(data.error || 'Failed to update holding'); return; }
+      if (!ok) { toast.error((data as { error?: string }).error || 'Failed to update holding'); return; }
       setHoldings((prev) => prev.map((h) => {
         if (h.id !== selectedHolding.id) return h;
         return toStoredHolding({ ...h, ...data, transactions: h.transactions } as unknown as DbHolding);
@@ -415,20 +372,19 @@ export function useHoldings(): UseHoldingsReturn {
       setEditDialogOpen(false); setSelectedHolding(null);
       toast.success(`Updated ${selectedHolding.symbol}`);
     } catch { toast.error('Failed to update holding'); }
-  }, [selectedHolding, formShares, formAvgCost, formPurchaseDate, authFetch]);
+  }, [selectedHolding, formShares, formAvgCost, formPurchaseDate]);
 
   // ── Delete holding ──────────────────────────────────────────
   const handleDeleteHolding = useCallback(async () => {
     if (!selectedHolding) return;
     try {
-      const res = await authFetch(`/api/holdings/${selectedHolding.id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) { toast.error(data.error || 'Failed to delete holding'); return; }
+      const { ok, data } = await apiFetch<{ deleted?: string }>(`/api/holdings/${selectedHolding.id}`, { method: 'DELETE' });
+      if (!ok) { toast.error((data as { error?: string }).error || 'Failed to delete holding'); return; }
       setHoldings((prev) => prev.filter((h) => h.id !== selectedHolding.id));
       setDeleteDialogOpen(false); setSelectedHolding(null);
-      toast.success(`Removed ${data.deleted || selectedHolding.symbol} from portfolio`);
+      toast.success(`Removed ${(data as { deleted?: string }).deleted || selectedHolding.symbol} from portfolio`);
     } catch { toast.error('Failed to delete holding'); }
-  }, [selectedHolding, authFetch]);
+  }, [selectedHolding]);
 
   // ── Add transaction ─────────────────────────────────────────
   const handleAddTransaction = useCallback(async () => {
@@ -440,33 +396,31 @@ export function useHoldings(): UseHoldingsReturn {
     }
     if (!formTxDate) { toast.error('Please enter a transaction date'); return; }
     try {
-      const res = await authFetch(`/api/holdings/${selectedHolding.id}/transactions`, {
+      const { ok, data } = await apiFetch(`/api/holdings/${selectedHolding.id}/transactions`, {
         method: 'POST',
         body: JSON.stringify({
           type: formTxType, shares, price, date: formTxDate,
           notes: formTxNotes.trim() || null,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) { toast.error(data.error || 'Failed to add transaction'); return; }
+      if (!ok) { toast.error((data as { error?: string }).error || 'Failed to add transaction'); return; }
       await fetchHoldings();
       setTxDialogOpen(false); setSelectedHolding(null); resetTxForm();
       toast.success(`${formTxType} ${shares} shares of ${selectedHolding.symbol}`);
     } catch { toast.error('Failed to add transaction'); }
-  }, [selectedHolding, formTxType, formTxShares, formTxPrice, formTxDate, formTxNotes, fetchHoldings, authFetch]);
+  }, [selectedHolding, formTxType, formTxShares, formTxPrice, formTxDate, formTxNotes, fetchHoldings]);
 
   // ── Fetch single holding transactions ───────────────────────
   const fetchTransactions = useCallback(async (holdingId: string) => {
     try {
-      const res = await authFetch(`/api/holdings/${holdingId}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      const { ok, data } = await apiFetch<DbHolding>(`/api/holdings/${holdingId}`);
+      if (!ok) return;
       setHoldings((prev) => prev.map((h) => {
         if (h.id !== holdingId) return h;
-        return toStoredHolding({ ...data, transactions: data.transactions ?? h.transactions } as unknown as DbHolding);
+        return toStoredHolding({ ...data, transactions: (data as DbHolding).transactions ?? h.transactions } as unknown as DbHolding);
       }));
     } catch { /* ignore */ }
-  }, [authFetch]);
+  }, []);
 
   // ── Dialog openers ─────────────────────────────────────────
   const openEditDialog = useCallback((holding: Holding) => {
