@@ -28,7 +28,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if username already exists
     const existing = await prisma.account.findUnique({
       where: { username: trimmed.toLowerCase() },
     });
@@ -40,7 +39,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create account
     const hashedPassword = hashPassword(password);
     const account = await prisma.account.create({
       data: {
@@ -49,10 +47,10 @@ export async function POST(request: Request) {
       },
     });
 
-    // Create session and set cookie on response
     const token = await createSession(account.id);
     const response = NextResponse.json({
       success: true,
+      token,
       account: { id: account.id, username: account.username },
     });
     setSessionCookie(response, token);

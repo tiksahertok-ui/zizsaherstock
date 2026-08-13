@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentSession } from '@/lib/auth';
 
-// GET /api/holdings — Return all holdings with transactions for the authenticated user
-export async function GET() {
+// GET /api/holdings
+export async function GET(request: NextRequest) {
   try {
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -18,24 +18,14 @@ export async function GET() {
 
     return NextResponse.json({
       holdings: holdings.map(h => ({
-        id: h.id,
-        symbol: h.symbol,
-        name: h.name,
-        shares: h.shares,
-        avgCost: h.avgCost,
+        id: h.id, symbol: h.symbol, name: h.name,
+        shares: h.shares, avgCost: h.avgCost,
         purchaseDate: h.purchaseDate.toISOString(),
-        createdAt: h.createdAt.toISOString(),
-        updatedAt: h.updatedAt.toISOString(),
+        createdAt: h.createdAt.toISOString(), updatedAt: h.updatedAt.toISOString(),
         transactions: h.transactions.map(t => ({
-          id: t.id,
-          holdingId: t.holdingId,
-          type: t.type,
-          shares: t.shares,
-          price: t.price,
-          total: t.total,
-          date: t.date.toISOString(),
-          notes: t.notes,
-          createdAt: t.createdAt.toISOString(),
+          id: t.id, holdingId: t.holdingId, type: t.type,
+          shares: t.shares, price: t.price, total: t.total,
+          date: t.date.toISOString(), notes: t.notes, createdAt: t.createdAt.toISOString(),
         })),
       })),
     });
@@ -45,10 +35,10 @@ export async function GET() {
   }
 }
 
-// POST /api/holdings — Add a new holding
+// POST /api/holdings
 export async function POST(request: NextRequest) {
   try {
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -67,7 +57,6 @@ export async function POST(request: NextRequest) {
 
     const upperSymbol = symbol.trim().toUpperCase();
 
-    // Check for duplicate
     const existing = await prisma.holding.findFirst({
       where: { accountId: session.account.id, symbol: upperSymbol },
     });
@@ -81,13 +70,10 @@ export async function POST(request: NextRequest) {
       if (!isNaN(d.getTime())) parsedDate = d;
     }
 
-    // Create holding with initial transaction
     const holding = await prisma.holding.create({
       data: {
-        symbol: upperSymbol,
-        name: name.trim(),
-        shares: intShares,
-        avgCost,
+        symbol: upperSymbol, name: name.trim(),
+        shares: intShares, avgCost,
         purchaseDate: parsedDate,
         accountId: session.account.id,
         transactions: transaction ? {
@@ -105,24 +91,14 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({
-      id: holding.id,
-      symbol: holding.symbol,
-      name: holding.name,
-      shares: holding.shares,
-      avgCost: holding.avgCost,
+      id: holding.id, symbol: holding.symbol, name: holding.name,
+      shares: holding.shares, avgCost: holding.avgCost,
       purchaseDate: holding.purchaseDate.toISOString(),
-      createdAt: holding.createdAt.toISOString(),
-      updatedAt: holding.updatedAt.toISOString(),
+      createdAt: holding.createdAt.toISOString(), updatedAt: holding.updatedAt.toISOString(),
       transactions: holding.transactions.map(t => ({
-        id: t.id,
-        holdingId: t.holdingId,
-        type: t.type,
-        shares: t.shares,
-        price: t.price,
-        total: t.total,
-        date: t.date.toISOString(),
-        notes: t.notes,
-        createdAt: t.createdAt.toISOString(),
+        id: t.id, holdingId: t.holdingId, type: t.type,
+        shares: t.shares, price: t.price, total: t.total,
+        date: t.date.toISOString(), notes: t.notes, createdAt: t.createdAt.toISOString(),
       })),
     }, { status: 201 });
   } catch (err) {

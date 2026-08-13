@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getCurrentSession, cleanupExpiredSessions } from '@/lib/auth';
+import { NextRequest } from 'next/server';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    // Periodic cleanup (runs on ~1% of session checks)
     if (Math.random() < 0.01) {
       cleanupExpiredSessions().catch(() => {});
     }
 
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
 
     if (!session) {
       return NextResponse.json({ authenticated: false }, { status: 401 });
@@ -16,6 +16,7 @@ export async function GET() {
 
     return NextResponse.json({
       authenticated: true,
+      token: session.token,
       account: {
         id: session.account.id,
         username: session.account.username,

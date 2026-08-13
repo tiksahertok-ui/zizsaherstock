@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
-import { deleteSessionFromDb, clearSessionCookie } from '@/lib/auth';
+import { deleteSessionByToken, clearSessionCookie, getCurrentSession } from '@/lib/auth';
+import { NextRequest } from 'next/server';
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
-    await deleteSessionFromDb();
+    const session = await getCurrentSession(request);
+    if (session) {
+      await deleteSessionByToken(session.token);
+    }
     const response = NextResponse.json({ success: true });
     clearSessionCookie(response);
     return response;

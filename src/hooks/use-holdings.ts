@@ -10,13 +10,13 @@ import type {
 } from '@/types';
 import { enrichHolding } from '@/utils/formatters';
 
-// ── Profile type (matches DB auth response) ──────────────────────
+// ── Profile type ──────────────────────────────────────────────
 export interface Profile {
   id: string;
   username: string;
 }
 
-// ── DB response shape from GET /api/holdings ─────────────────────
+// ── DB response shape ─────────────────────────────────────────
 interface DbHolding {
   id: string;
   symbol: string;
@@ -41,32 +41,37 @@ interface DbTransaction {
   createdAt: string;
 }
 
-/** Convert a raw DB holding into a StoredHolding with computed defaults */
 function toStoredHolding(db: DbHolding): StoredHolding {
-  const currentPrice = db.avgCost;
-  const marketValue = db.shares * currentPrice;
-  const costBasis = db.shares * db.avgCost;
-  const pnl = 0;
-  const pnlPercent = 0;
-  const dayChange = 0;
-  const dayChangePercent = 0;
-
   return {
     ...db,
-    currentPrice,
-    marketValue,
-    costBasis,
-    pnl,
-    pnlPercent,
-    dayChange,
-    dayChangePercent,
+    currentPrice: db.avgCost,
+    marketValue: db.shares * db.avgCost,
+    costBasis: db.shares * db.avgCost,
+    pnl: 0,
+    pnlPercent: 0,
+    dayChange: 0,
+    dayChangePercent: 0,
     transactions: db.transactions.map((t) => ({ ...t })),
   };
 }
 
-// ── Return type ───────────────────────────────────────────────────
+// ── Token storage (survives proxy issues) ─────────────────────
+const TOKEN_KEY = 'egx-auth-token';
+
+function saveToken(token: string) {
+  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* noop */ }
+}
+
+function loadToken(): string | null {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+}
+
+function clearToken() {
+  try { localStorage.removeItem(TOKEN_KEY); } catch { /* noop */ }
+}
+
+// ── Return type ───────────────────────────────────────────────
 export interface UseHoldingsReturn {
-  // Auth state
   profile: Profile | null;
   authenticated: boolean;
   hydrated: boolean;
@@ -84,20 +89,14 @@ export interface UseHoldingsReturn {
   handleLogin: () => void;
   handleRegister: () => void;
   handleLogout: () => void;
-
-  // Holdings data
   holdings: StoredHolding[];
   setHoldings: React.Dispatch<React.SetStateAction<StoredHolding[]>>;
   loading: boolean;
   fetchHoldings: () => Promise<void>;
-
-  // Sorting
   sortField: SortField;
   sortDir: SortDir;
   sortedHoldings: StoredHolding[];
   toggleSort: (field: SortField) => void;
-
-  // Dialogs
   addDialogOpen: boolean;
   setAddDialogOpen: (v: boolean) => void;
   editDialogOpen: boolean;
@@ -106,26 +105,18 @@ export interface UseHoldingsReturn {
   setDeleteDialogOpen: (v: boolean) => void;
   txDialogOpen: boolean;
   setTxDialogOpen: (v: boolean) => void;
-
-  // Selection
   selectedHolding: Holding | null;
   setSelectedHolding: (h: Holding | null) => void;
-
-  // Search / stock picker
   searchQuery: string;
   setSearchQuery: (v: string) => void;
   selectedStock: StockOption | null;
   setSelectedStock: (s: StockOption | null) => void;
-
-  // Add-holding form
   formShares: string;
   setFormShares: (v: string) => void;
   formAvgCost: string;
   setFormAvgCost: (v: string) => void;
   formPurchaseDate: string;
   setFormPurchaseDate: (v: string) => void;
-
-  // Transaction form
   formTxType: 'BUY' | 'SELL';
   setFormTxType: (v: 'BUY' | 'SELL') => void;
   formTxShares: string;
@@ -136,30 +127,21 @@ export interface UseHoldingsReturn {
   setFormTxDate: (v: string) => void;
   formTxNotes: string;
   setFormTxNotes: (v: string) => void;
-
-  // CRUD handlers
   handleAddHolding: () => void;
   handleUpdateHolding: () => void;
   handleDeleteHolding: () => void;
   handleAddTransaction: () => void;
   fetchTransactions: (holdingId: string) => void;
-
-  // Dialog openers
   openEditDialog: (holding: Holding) => void;
   openDeleteDialog: (holding: Holding) => void;
   openTxDialog: (holding: Holding) => void;
-
-  // Form resets
   resetForm: () => void;
   resetTxForm: () => void;
-
-  // Computed summary
   summary: PortfolioSummary | null;
 }
 
-// ── Hook ─────────────────────────────────────────────────────────
+// ── Hook ──────────────────────────────────────────────────────
 export function useHoldings(): UseHoldingsReturn {
-  // ── Auth state ─────────────────────────────────────────────────
   const [profile, setProfile] = useState<Profile | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -171,61 +153,64 @@ export function useHoldings(): UseHoldingsReturn {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loginError, setLoginError] = useState('');
 
-  // ── Holdings data ─────────────────────────────────────────────
   const [holdings, setHoldings] = useState<StoredHolding[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ── Sorting ───────────────────────────────────────────────────
   const [sortField, setSortField] = useState<SortField>('marketValue');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  // ── Dialogs ───────────────────────────────────────────────────
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [txDialogOpen, setTxDialogOpen] = useState(false);
 
-  // ── Selection ──────────────────────────────────────────────────
   const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
-
-  // ── Search / stock picker ──────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStock, setSelectedStock] = useState<StockOption | null>(null);
 
-  // ── Add-holding form ───────────────────────────────────────────
   const [formShares, setFormShares] = useState('');
   const [formAvgCost, setFormAvgCost] = useState('');
   const [formPurchaseDate, setFormPurchaseDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
-  // ── Transaction form ───────────────────────────────────────────
   const [formTxType, setFormTxType] = useState<'BUY' | 'SELL'>('BUY');
   const [formTxShares, setFormTxShares] = useState('');
   const [formTxPrice, setFormTxPrice] = useState('');
   const [formTxDate, setFormTxDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [formTxNotes, setFormTxNotes] = useState('');
 
-  // Prevent double-fire of fetchHoldings
-  const authVerifiedRef = useRef(false);
+  // ── Authenticated fetch helper (always sends token) ─────────
+  const authFetch = useCallback((url: string, options: RequestInit = {}) => {
+    const token = loadToken();
+    const headers = new Headers(options.headers || {});
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    if (!headers.has('Content-Type') && options.body) {
+      headers.set('Content-Type', 'application/json');
+    }
+    return fetch(url, { ...options, headers, credentials: 'include' });
+  }, []);
 
-  // ── Check session on mount ─────────────────────────────────────
+  // ── Check session on mount (also restores from localStorage) ─
   useEffect(() => {
     let cancelled = false;
 
     async function checkSession() {
       try {
-        const res = await fetch('/api/auth/session', { credentials: 'include' });
+        const res = await authFetch('/api/auth/session');
         if (cancelled) return;
 
         if (res.ok) {
           const data = await res.json();
           if (data.authenticated && data.account) {
+            // Update stored token if server returned a fresh one
+            if (data.token) saveToken(data.token);
             setProfile({ id: data.account.id, username: data.account.username });
             setAuthenticated(true);
-            authVerifiedRef.current = true;
           }
         }
       } catch {
-        // Not authenticated — that's fine on mount
+        // Not authenticated
       } finally {
         if (!cancelled) setHydrated(true);
       }
@@ -233,21 +218,21 @@ export function useHoldings(): UseHoldingsReturn {
 
     checkSession();
     return () => { cancelled = true; };
-  }, []);
+  }, [authFetch]);
 
-  // ── Fetch holdings after auth is established ───────────────────
+  // ── Fetch holdings ──────────────────────────────────────────
   const fetchHoldings = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/holdings', { credentials: 'include' });
+      const res = await authFetch('/api/holdings');
       if (!res.ok) {
         if (res.status === 401) {
-          // Session might have expired — verify once before logging out
-          const sessionRes = await fetch('/api/auth/session', { credentials: 'include' });
+ // Double-check session
+          const sessionRes = await authFetch('/api/auth/session');
           if (!sessionRes.ok) {
             setProfile(null);
             setAuthenticated(false);
-            authVerifiedRef.current = false;
+            clearToken();
             setHoldings([]);
           }
           return;
@@ -255,43 +240,20 @@ export function useHoldings(): UseHoldingsReturn {
         throw new Error('Failed to fetch holdings');
       }
       const data = await res.json();
-      const mapped: StoredHolding[] = (data.holdings ?? []).map(toStoredHolding);
-      setHoldings(mapped);
+      setHoldings((data.holdings ?? []).map(toStoredHolding));
     } catch (err) {
       console.error('fetchHoldings error:', err);
       toast.error('Failed to load holdings');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authFetch]);
 
-  // Auto-fetch when authenticated (only after session is verified)
   useEffect(() => {
-    if (authenticated && authVerifiedRef.current) {
-      fetchHoldings();
-    }
+    if (authenticated) fetchHoldings();
   }, [authenticated, fetchHoldings]);
 
-  // ── Verify session after login/register ───────────────────────
-  const verifyAndSetAuth = useCallback(async (): Promise<boolean> => {
-    try {
-      const sessionRes = await fetch('/api/auth/session', { credentials: 'include' });
-      if (sessionRes.ok) {
-        const sessionData = await sessionRes.json();
-        if (sessionData.authenticated && sessionData.account) {
-          setProfile({ id: sessionData.account.id, username: sessionData.account.username });
-          setAuthenticated(true);
-          authVerifiedRef.current = true;
-          return true;
-        }
-      }
-    } catch {
-      // Session verification failed
-    }
-    return false;
-  }, []);
-
-  // ── Login ──────────────────────────────────────────────────────
+  // ── Login ───────────────────────────────────────────────────
   const handleLogin = useCallback(async () => {
     setLoginError('');
     setAuthLoading(true);
@@ -314,25 +276,22 @@ export function useHoldings(): UseHoldingsReturn {
         return;
       }
 
-      if (data.success) {
-        // Verify the session cookie was actually set before considering user logged in
-        const verified = await verifyAndSetAuth();
-        if (verified) {
-          setLoginUsername('');
-          setLoginPassword('');
-          toast.success(`Welcome back, ${data.account?.username || ''}!`);
-        } else {
-          setLoginError('Login succeeded but session could not be established. Please try again.');
-        }
+      if (data.success && data.token) {
+        saveToken(data.token);
+        setProfile({ id: data.account.id, username: data.account.username });
+        setAuthenticated(true);
+        setLoginUsername('');
+        setLoginPassword('');
+        toast.success(`Welcome back, ${data.account.username}!`);
       }
     } catch {
       setLoginError('Network error. Please try again.');
     } finally {
       setAuthLoading(false);
     }
-  }, [loginUsername, loginPassword, verifyAndSetAuth]);
+  }, [loginUsername, loginPassword]);
 
-  // ── Register ──────────────────────────────────────────────────
+  // ── Register ────────────────────────────────────────────────
   const handleRegister = useCallback(async () => {
     setLoginError('');
     setAuthLoading(true);
@@ -355,36 +314,31 @@ export function useHoldings(): UseHoldingsReturn {
         return;
       }
 
-      if (data.success) {
-        // Verify the session cookie was actually set
-        const verified = await verifyAndSetAuth();
-        if (verified) {
-          setLoginUsername('');
-          setLoginPassword('');
-          setConfirmPassword('');
-          setIsRegisterMode(false);
-          toast.success(`Account created! Welcome, ${data.account?.username || ''}!`);
-        } else {
-          setLoginError('Registration succeeded but session could not be established. Please try again.');
-        }
+      if (data.success && data.token) {
+        saveToken(data.token);
+        setProfile({ id: data.account.id, username: data.account.username });
+        setAuthenticated(true);
+        setLoginUsername('');
+        setLoginPassword('');
+        setConfirmPassword('');
+        setIsRegisterMode(false);
+        toast.success(`Account created! Welcome, ${data.account.username}!`);
       }
     } catch {
       setLoginError('Network error. Please try again.');
     } finally {
       setAuthLoading(false);
     }
-  }, [loginUsername, loginPassword, verifyAndSetAuth]);
+  }, [loginUsername, loginPassword]);
 
-  // ── Logout ─────────────────────────────────────────────────────
+  // ── Logout ──────────────────────────────────────────────────
   const handleLogout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-    } catch {
-      // Best-effort
-    } finally {
+      await authFetch('/api/auth/logout', { method: 'POST' });
+    } catch { /* best-effort */ } finally {
+      clearToken();
       setProfile(null);
       setAuthenticated(false);
-      authVerifiedRef.current = false;
       setHoldings([]);
       setAddDialogOpen(false);
       setEditDialogOpen(false);
@@ -393,28 +347,18 @@ export function useHoldings(): UseHoldingsReturn {
       setSelectedHolding(null);
       toast.success('Logged out');
     }
-  }, []);
+  }, [authFetch]);
 
-  // ── Sorting ───────────────────────────────────────────────────
+  // ── Sorting ─────────────────────────────────────────────────
   const sortedHoldings = useMemo(() => {
     return [...holdings].sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
-        case 'symbol':
-          cmp = a.symbol.localeCompare(b.symbol);
-          break;
-        case 'marketValue':
-          cmp = a.marketValue - b.marketValue;
-          break;
-        case 'pnl':
-          cmp = a.pnl - b.pnl;
-          break;
-        case 'pnlPercent':
-          cmp = a.pnlPercent - b.pnlPercent;
-          break;
-        case 'dayChange':
-          cmp = a.dayChange - b.dayChange;
-          break;
+        case 'symbol': cmp = a.symbol.localeCompare(b.symbol); break;
+        case 'marketValue': cmp = a.marketValue - b.marketValue; break;
+        case 'pnl': cmp = a.pnl - b.pnl; break;
+        case 'pnlPercent': cmp = a.pnlPercent - b.pnlPercent; break;
+        case 'dayChange': cmp = a.dayChange - b.dayChange; break;
       }
       return sortDir === 'asc' ? cmp : -cmp;
     });
@@ -427,203 +371,108 @@ export function useHoldings(): UseHoldingsReturn {
     });
   }, []);
 
-  // ── Add holding ────────────────────────────────────────────────
+  // ── Add holding ─────────────────────────────────────────────
   const handleAddHolding = useCallback(async () => {
-    if (!selectedStock) {
-      toast.error('Please select a stock');
-      return;
-    }
+    if (!selectedStock) { toast.error('Please select a stock'); return; }
     const shares = parseInt(formShares, 10);
     const avgCost = parseFloat(formAvgCost);
     if (!shares || shares <= 0 || !avgCost || avgCost <= 0) {
-      toast.error('Please enter valid shares and average cost');
-      return;
+      toast.error('Please enter valid shares and average cost'); return;
     }
-
     const purchaseDate = formPurchaseDate || format(new Date(), 'yyyy-MM-dd');
-
     try {
-      const res = await fetch('/api/holdings', {
+      const res = await authFetch('/api/holdings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
-          symbol: selectedStock.symbol,
-          name: selectedStock.name,
-          shares,
-          avgCost,
-          purchaseDate,
-          transaction: {
-            type: 'BUY',
-            shares,
-            price: avgCost,
-            date: purchaseDate,
-          },
+          symbol: selectedStock.symbol, name: selectedStock.name,
+          shares, avgCost, purchaseDate,
+          transaction: { type: 'BUY', shares, price: avgCost, date: purchaseDate },
         }),
       });
-
       const data = await res.json();
-
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to add holding');
-        return;
-      }
-
-      const newHolding = toStoredHolding(data);
-      setHoldings((prev) => [newHolding, ...prev]);
-      setAddDialogOpen(false);
-      resetForm();
+      if (!res.ok) { toast.error(data.error || 'Failed to add holding'); return; }
+      setHoldings((prev) => [toStoredHolding(data), ...prev]);
+      setAddDialogOpen(false); resetForm();
       toast.success(`Added ${selectedStock.symbol} to portfolio`);
-    } catch {
-      toast.error('Failed to add holding');
-    }
-  }, [selectedStock, formShares, formAvgCost, formPurchaseDate]);
+    } catch { toast.error('Failed to add holding'); }
+  }, [selectedStock, formShares, formAvgCost, formPurchaseDate, authFetch]);
 
-  // ── Update holding ─────────────────────────────────────────────
+  // ── Update holding ──────────────────────────────────────────
   const handleUpdateHolding = useCallback(async () => {
     if (!selectedHolding) return;
-
     const shares = parseInt(formShares, 10);
     const avgCost = parseFloat(formAvgCost);
     if (!shares || shares <= 0 || !avgCost || avgCost <= 0) {
-      toast.error('Please enter valid shares and average cost');
-      return;
+      toast.error('Please enter valid shares and average cost'); return;
     }
-
     try {
-      const res = await fetch(`/api/holdings/${selectedHolding.id}`, {
+      const res = await authFetch(`/api/holdings/${selectedHolding.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          shares,
-          avgCost,
-          purchaseDate: formPurchaseDate || undefined,
-        }),
+        body: JSON.stringify({ shares, avgCost, purchaseDate: formPurchaseDate || undefined }),
       });
-
       const data = await res.json();
-
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to update holding');
-        return;
-      }
-
-      setHoldings((prev) =>
-        prev.map((h) => {
-          if (h.id !== selectedHolding.id) return h;
-          return toStoredHolding({
-            ...h,
-            ...data,
-            transactions: h.transactions,
-          } as unknown as DbHolding);
-        }),
-      );
-      setEditDialogOpen(false);
-      setSelectedHolding(null);
+      if (!res.ok) { toast.error(data.error || 'Failed to update holding'); return; }
+      setHoldings((prev) => prev.map((h) => {
+        if (h.id !== selectedHolding.id) return h;
+        return toStoredHolding({ ...h, ...data, transactions: h.transactions } as unknown as DbHolding);
+      }));
+      setEditDialogOpen(false); setSelectedHolding(null);
       toast.success(`Updated ${selectedHolding.symbol}`);
-    } catch {
-      toast.error('Failed to update holding');
-    }
-  }, [selectedHolding, formShares, formAvgCost, formPurchaseDate]);
+    } catch { toast.error('Failed to update holding'); }
+  }, [selectedHolding, formShares, formAvgCost, formPurchaseDate, authFetch]);
 
-  // ── Delete holding ────────────────────────────────────────────
+  // ── Delete holding ──────────────────────────────────────────
   const handleDeleteHolding = useCallback(async () => {
     if (!selectedHolding) return;
-
     try {
-      const res = await fetch(`/api/holdings/${selectedHolding.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
+      const res = await authFetch(`/api/holdings/${selectedHolding.id}`, { method: 'DELETE' });
       const data = await res.json();
-
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to delete holding');
-        return;
-      }
-
+      if (!res.ok) { toast.error(data.error || 'Failed to delete holding'); return; }
       setHoldings((prev) => prev.filter((h) => h.id !== selectedHolding.id));
-      setDeleteDialogOpen(false);
-      setSelectedHolding(null);
+      setDeleteDialogOpen(false); setSelectedHolding(null);
       toast.success(`Removed ${data.deleted || selectedHolding.symbol} from portfolio`);
-    } catch {
-      toast.error('Failed to delete holding');
-    }
-  }, [selectedHolding]);
+    } catch { toast.error('Failed to delete holding'); }
+  }, [selectedHolding, authFetch]);
 
-  // ── Add transaction ───────────────────────────────────────────
+  // ── Add transaction ─────────────────────────────────────────
   const handleAddTransaction = useCallback(async () => {
     if (!selectedHolding) return;
-
     const shares = parseInt(formTxShares, 10);
     const price = parseFloat(formTxPrice);
     if (!shares || shares <= 0 || !price || price <= 0) {
-      toast.error('Please enter valid shares and price');
-      return;
+      toast.error('Please enter valid shares and price'); return;
     }
-    if (!formTxDate) {
-      toast.error('Please enter a transaction date');
-      return;
-    }
-
+    if (!formTxDate) { toast.error('Please enter a transaction date'); return; }
     try {
-      const res = await fetch(`/api/holdings/${selectedHolding.id}/transactions`, {
+      const res = await authFetch(`/api/holdings/${selectedHolding.id}/transactions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
-          type: formTxType,
-          shares,
-          price,
-          date: formTxDate,
+          type: formTxType, shares, price, date: formTxDate,
           notes: formTxNotes.trim() || null,
         }),
       });
-
       const data = await res.json();
-
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to add transaction');
-        return;
-      }
-
+      if (!res.ok) { toast.error(data.error || 'Failed to add transaction'); return; }
       await fetchHoldings();
-
-      setTxDialogOpen(false);
-      setSelectedHolding(null);
-      resetTxForm();
+      setTxDialogOpen(false); setSelectedHolding(null); resetTxForm();
       toast.success(`${formTxType} ${shares} shares of ${selectedHolding.symbol}`);
-    } catch {
-      toast.error('Failed to add transaction');
-    }
-  }, [selectedHolding, formTxType, formTxShares, formTxPrice, formTxDate, formTxNotes, fetchHoldings]);
+    } catch { toast.error('Failed to add transaction'); }
+  }, [selectedHolding, formTxType, formTxShares, formTxPrice, formTxDate, formTxNotes, fetchHoldings, authFetch]);
 
-  // ── Fetch transactions for a specific holding (refreshes that holding) ─
-  const fetchTransactions = useCallback(
-    async (holdingId: string) => {
-      try {
-        const res = await fetch(`/api/holdings/${holdingId}`, { credentials: 'include' });
-        if (!res.ok) return;
-        const data = await res.json();
-        setHoldings((prev) =>
-          prev.map((h) => {
-            if (h.id !== holdingId) return h;
-            return toStoredHolding({
-              ...data,
-              transactions: data.transactions ?? h.transactions,
-            } as unknown as DbHolding);
-          }),
-        );
-      } catch {
-        // Silently ignore
-      }
-    },
-    [],
-  );
+  // ── Fetch single holding transactions ───────────────────────
+  const fetchTransactions = useCallback(async (holdingId: string) => {
+    try {
+      const res = await authFetch(`/api/holdings/${holdingId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setHoldings((prev) => prev.map((h) => {
+        if (h.id !== holdingId) return h;
+        return toStoredHolding({ ...data, transactions: data.transactions ?? h.transactions } as unknown as DbHolding);
+      }));
+    } catch { /* ignore */ }
+  }, [authFetch]);
 
-  // ── Dialog openers ───────────────────────────────────────────
+  // ── Dialog openers ─────────────────────────────────────────
   const openEditDialog = useCallback((holding: Holding) => {
     setSelectedHolding(holding);
     setFormShares(String(holding.shares));
@@ -633,175 +482,65 @@ export function useHoldings(): UseHoldingsReturn {
   }, []);
 
   const openDeleteDialog = useCallback((holding: Holding) => {
-    setSelectedHolding(holding);
-    setDeleteDialogOpen(true);
+    setSelectedHolding(holding); setDeleteDialogOpen(true);
   }, []);
 
   const openTxDialog = useCallback((holding: Holding) => {
     setSelectedHolding(holding);
-    setFormTxType('BUY');
-    setFormTxShares('');
-    setFormTxPrice('');
-    setFormTxDate(format(new Date(), 'yyyy-MM-dd'));
-    setFormTxNotes('');
+    setFormTxType('BUY'); setFormTxShares(''); setFormTxPrice('');
+    setFormTxDate(format(new Date(), 'yyyy-MM-dd')); setFormTxNotes('');
     setTxDialogOpen(true);
   }, []);
 
-  // ── Form resets ────────────────────────────────────────────────
+  // ── Form resets ─────────────────────────────────────────────
   const resetForm = useCallback(() => {
-    setSelectedStock(null);
-    setFormShares('');
-    setFormAvgCost('');
+    setSelectedStock(null); setFormShares(''); setFormAvgCost('');
     setFormPurchaseDate(format(new Date(), 'yyyy-MM-dd'));
   }, []);
 
   const resetTxForm = useCallback(() => {
-    setFormTxType('BUY');
-    setFormTxShares('');
-    setFormTxPrice('');
-    setFormTxDate(format(new Date(), 'yyyy-MM-dd'));
-    setFormTxNotes('');
+    setFormTxType('BUY'); setFormTxShares(''); setFormTxPrice('');
+    setFormTxDate(format(new Date(), 'yyyy-MM-dd')); setFormTxNotes('');
   }, []);
 
-  // ── Portfolio summary (computed) ──────────────────────────────
+  // ── Summary ─────────────────────────────────────────────────
   const summary: PortfolioSummary = useMemo(() => {
     if (holdings.length === 0) {
-      return {
-        totalInvestment: 0,
-        totalMarketValue: 0,
-        totalPnL: 0,
-        totalPnLPercent: 0,
-        todaysChange: 0,
-        todaysChangePercent: 0,
-        numberOfHoldings: 0,
-        bestPerformer: null,
-        worstPerformer: null,
-      };
+      return { totalInvestment: 0, totalMarketValue: 0, totalPnL: 0, totalPnLPercent: 0,
+        todaysChange: 0, todaysChangePercent: 0, numberOfHoldings: 0,
+        bestPerformer: null, worstPerformer: null };
     }
-
-    const totalInvestment = holdings.reduce((sum, h) => sum + h.costBasis, 0);
-    const totalMarketValue = holdings.reduce((sum, h) => sum + h.marketValue, 0);
+    const totalInvestment = holdings.reduce((s, h) => s + h.costBasis, 0);
+    const totalMarketValue = holdings.reduce((s, h) => s + h.marketValue, 0);
     const totalPnL = totalMarketValue - totalInvestment;
     const totalPnLPercent = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
-    const todaysChange = holdings.reduce((sum, h) => sum + h.dayChange, 0);
-    const todaysChangePercent =
-      totalMarketValue > 0 ? (todaysChange / (totalMarketValue - todaysChange)) * 100 : 0;
-
-    let bestPerformer: PortfolioSummary['bestPerformer'] = null;
-    let worstPerformer: PortfolioSummary['worstPerformer'] = null;
-
+    const todaysChange = holdings.reduce((s, h) => s + h.dayChange, 0);
+    const todaysChangePercent = totalMarketValue > 0 ? (todaysChange / (totalMarketValue - todaysChange)) * 100 : 0;
+    let best: PortfolioSummary['bestPerformer'] = null;
+    let worst: PortfolioSummary['worstPerformer'] = null;
     for (const h of holdings) {
-      if (!bestPerformer || h.pnlPercent > bestPerformer.pnlPercent) {
-        bestPerformer = { symbol: h.symbol, name: h.name, pnlPercent: h.pnlPercent, pnl: h.pnl };
-      }
-      if (!worstPerformer || h.pnlPercent < worstPerformer.pnlPercent) {
-        worstPerformer = { symbol: h.symbol, name: h.name, pnlPercent: h.pnlPercent, pnl: h.pnl };
-      }
+      if (!best || h.pnlPercent > best.pnlPercent) best = { symbol: h.symbol, name: h.name, pnlPercent: h.pnlPercent, pnl: h.pnl };
+      if (!worst || h.pnlPercent < worst.pnlPercent) worst = { symbol: h.symbol, name: h.name, pnlPercent: h.pnlPercent, pnl: h.pnl };
     }
-
-    return {
-      totalInvestment,
-      totalMarketValue,
-      totalPnL,
-      totalPnLPercent,
-      todaysChange,
-      todaysChangePercent,
-      numberOfHoldings: holdings.length,
-      bestPerformer,
-      worstPerformer,
-    };
+    return { totalInvestment, totalMarketValue, totalPnL, totalPnLPercent, todaysChange, todaysChangePercent, numberOfHoldings: holdings.length, bestPerformer: best, worstPerformer: worst };
   }, [holdings]);
 
-  // ── Return ────────────────────────────────────────────────────
+  // ── Return ──────────────────────────────────────────────────
   return {
-    // Auth
-    profile,
-    authenticated,
-    hydrated,
-    isRegisterMode,
-    setIsRegisterMode,
-    loginUsername,
-    setLoginUsername,
-    loginPassword,
-    setLoginPassword,
-    confirmPassword,
-    setConfirmPassword,
-    loginError,
-    setLoginError,
-    authLoading,
-    handleLogin,
-    handleRegister,
-    handleLogout,
-
-    // Holdings data
-    holdings,
-    setHoldings,
-    loading,
-    fetchHoldings,
-
-    // Sorting
-    sortField,
-    sortDir,
-    sortedHoldings,
-    toggleSort,
-
-    // Dialogs
-    addDialogOpen,
-    setAddDialogOpen,
-    editDialogOpen,
-    setEditDialogOpen,
-    deleteDialogOpen,
-    setDeleteDialogOpen,
-    txDialogOpen,
-    setTxDialogOpen,
-
-    // Selection
-    selectedHolding,
-    setSelectedHolding,
-
-    // Search / stock picker
-    searchQuery,
-    setSearchQuery,
-    selectedStock,
-    setSelectedStock,
-
-    // Add-holding form
-    formShares,
-    setFormShares,
-    formAvgCost,
-    setFormAvgCost,
-    formPurchaseDate,
-    setFormPurchaseDate,
-
-    // Transaction form
-    formTxType,
-    setFormTxType,
-    formTxShares,
-    setFormTxShares,
-    formTxPrice,
-    setFormTxPrice,
-    formTxDate,
-    setFormTxDate,
-    formTxNotes,
-    setFormTxNotes,
-
-    // CRUD handlers
-    handleAddHolding,
-    handleUpdateHolding,
-    handleDeleteHolding,
-    handleAddTransaction,
-    fetchTransactions,
-
-    // Dialog openers
-    openEditDialog,
-    openDeleteDialog,
-    openTxDialog,
-
-    // Form resets
-    resetForm,
-    resetTxForm,
-
-    // Summary
-    summary,
+    profile, authenticated, hydrated, isRegisterMode, setIsRegisterMode,
+    loginUsername, setLoginUsername, loginPassword, setLoginPassword,
+    confirmPassword, setConfirmPassword, loginError, setLoginError, authLoading,
+    handleLogin, handleRegister, handleLogout,
+    holdings, setHoldings, loading, fetchHoldings,
+    sortField, sortDir, sortedHoldings, toggleSort,
+    addDialogOpen, setAddDialogOpen, editDialogOpen, setEditDialogOpen,
+    deleteDialogOpen, setDeleteDialogOpen, txDialogOpen, setTxDialogOpen,
+    selectedHolding, setSelectedHolding,
+    searchQuery, setSearchQuery, selectedStock, setSelectedStock,
+    formShares, setFormShares, formAvgCost, setFormAvgCost, formPurchaseDate, setFormPurchaseDate,
+    formTxType, setFormTxType, formTxShares, setFormTxShares,
+    formTxPrice, setFormTxPrice, formTxDate, setFormTxDate, formTxNotes, setFormTxNotes,
+    handleAddHolding, handleUpdateHolding, handleDeleteHolding, handleAddTransaction, fetchTransactions,
+    openEditDialog, openDeleteDialog, openTxDialog, resetForm, resetTxForm, summary,
   };
 }

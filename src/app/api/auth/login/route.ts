@@ -31,10 +31,10 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create session and set cookie on response
     const token = await createSession(account.id);
     const response = NextResponse.json({
       success: true,
+      token,
       account: { id: account.id, username: account.username },
     });
     setSessionCookie(response, token);

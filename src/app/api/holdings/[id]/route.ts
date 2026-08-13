@@ -7,15 +7,14 @@ interface RouteParams {
 }
 
 // GET /api/holdings/[id]
-export async function GET(_request: NextRequest, { params }: RouteParams) {
+export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id } = await params;
-
     const holding = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
       include: { transactions: { orderBy: { date: 'desc' } } },
@@ -26,14 +25,10 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     }
 
     return NextResponse.json({
-      id: holding.id,
-      symbol: holding.symbol,
-      name: holding.name,
-      shares: holding.shares,
-      avgCost: holding.avgCost,
+      id: holding.id, symbol: holding.symbol, name: holding.name,
+      shares: holding.shares, avgCost: holding.avgCost,
       purchaseDate: holding.purchaseDate.toISOString(),
-      createdAt: holding.createdAt.toISOString(),
-      updatedAt: holding.updatedAt.toISOString(),
+      createdAt: holding.createdAt.toISOString(), updatedAt: holding.updatedAt.toISOString(),
       transactions: holding.transactions.map(t => ({
         id: t.id, holdingId: t.holdingId, type: t.type,
         shares: t.shares, price: t.price, total: t.total,
@@ -49,7 +44,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 // PUT /api/holdings/[id]
 export async function PUT(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -58,7 +53,6 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     const body = await request.json();
     const { shares, avgCost, name, purchaseDate } = body;
 
-    // Verify ownership
     const existing = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
     });
@@ -104,15 +98,14 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 }
 
 // DELETE /api/holdings/[id]
-export async function DELETE(_request: NextRequest, { params }: RouteParams) {
+export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id } = await params;
-
     const existing = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
     });

@@ -7,15 +7,14 @@ interface RouteParams {
 }
 
 // GET /api/holdings/[id]/transactions
-export async function GET(_request: NextRequest, { params }: RouteParams) {
+export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id } = await params;
-
     const holding = await prisma.holding.findFirst({
       where: { id, accountId: session.account.id },
     });
@@ -39,10 +38,10 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
   }
 }
 
-// POST /api/holdings/[id]/transactions — Add BUY/SELL transaction
+// POST /api/holdings/[id]/transactions
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession();
+    const session = await getCurrentSession(request);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -76,7 +75,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Create transaction
     const transaction = await prisma.transaction.create({
       data: {
         holdingId: id, type, shares: intShares, price, total,
@@ -84,7 +82,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       },
     });
 
-    // Update holding
     if (type === 'BUY') {
       const totalShares = holding.shares + intShares;
       const newAvgCost = ((holding.shares * holding.avgCost) + total) / totalShares;
