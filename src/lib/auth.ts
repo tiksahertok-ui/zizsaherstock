@@ -5,7 +5,9 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const SESSION_COOKIE = 'egx-session';
 const AUTH_HEADER = 'authorization';
+const CUSTOM_TOKEN_HEADER = 'x-auth-token';
 const AUTH_PREFIX = 'Bearer ';
+const TOKEN_QUERY_PARAM = '_t';
 const SESSION_MAX_AGE_DAYS = 90;
 
 // ── Password hashing ──────────────────────────────────────────
@@ -48,13 +50,30 @@ export async function deleteSessionByToken(token: string): Promise<void> {
 export async function getCurrentSession(request?: NextRequest) {
   let token: string | null = null;
 
-  // 1. Try Authorization header (most reliable through proxies)
+  // 1. Try Authorization header
   const authHeader = request?.headers.get(AUTH_HEADER);
   if (authHeader?.startsWith(AUTH_PREFIX)) {
     token = authHeader.slice(AUTH_PREFIX.length);
   }
 
-  // 2. Fall back to cookie
+  // 2. Try custom X-Auth-Token header (survives most proxies)
+  if (!token) {
+    const customHeader = request?.headers.get(CUSTOM_TOKEN_HEADER);
+    if (customHeader) {
+      token = customHeader;
+    }
+  }
+
+  // 3. Try query parameter ?_t=xxx (last resort, works through any proxy)
+  if (!token && request) {
+    const url = new URL(request.url);
+    const qToken = url.searchParams.get(TOKEN_QUERY_PARAM);
+    if (qToken) {
+      token = qToken;
+    }
+  }
+
+  // 4. Fall back to cookie
   if (!token) {
     try {
       const cookieStore = await cookies();

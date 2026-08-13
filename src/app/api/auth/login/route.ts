@@ -40,9 +40,10 @@ export async function POST(request: Request) {
     setSessionCookie(response, token);
     return response;
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error('Login error:', err);
     return NextResponse.json(
-      { error: 'Login failed' },
+      { error: 'Login failed', detail: message },
       { status: 500 }
     );
   }

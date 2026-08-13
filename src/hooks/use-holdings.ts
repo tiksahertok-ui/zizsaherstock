@@ -178,17 +178,26 @@ export function useHoldings(): UseHoldingsReturn {
   const [formTxDate, setFormTxDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [formTxNotes, setFormTxNotes] = useState('');
 
-  // ── Authenticated fetch helper (always sends token) ─────────
+  // ── Authenticated fetch helper (sends token 3 ways for proxy resilience) ─────────
   const authFetch = useCallback((url: string, options: RequestInit = {}) => {
     const token = loadToken();
     const headers = new Headers(options.headers || {});
     if (token) {
+      // Method 1: Standard Authorization header
       headers.set('Authorization', `Bearer ${token}`);
+      // Method 2: Custom header (survives most proxies)
+      headers.set('X-Auth-Token', token);
     }
     if (!headers.has('Content-Type') && options.body) {
       headers.set('Content-Type', 'application/json');
     }
-    return fetch(url, { ...options, headers, credentials: 'include' });
+    // Method 3: Query parameter (last resort, works through ANY proxy)
+    let finalUrl = url;
+    if (token) {
+      const separator = url.includes('?') ? '&' : '?';
+      finalUrl = `${url}${separator}_t=${encodeURIComponent(token)}`;
+    }
+    return fetch(finalUrl, { ...options, headers, credentials: 'include' });
   }, []);
 
   // ── Check session on mount (also restores from localStorage) ─
@@ -271,7 +280,7 @@ export function useHoldings(): UseHoldingsReturn {
 
       if (!res.ok) {
         let msg = 'Login failed';
-        try { const d = await res.json(); msg = d.error || msg; } catch {}
+        try { const d = await res.json(); msg = d.detail ? `${d.error}: ${d.detail}` : (d.error || msg); } catch {}
         setLoginError(`${msg} (${res.status})`);
         return;
       }
@@ -313,7 +322,7 @@ export function useHoldings(): UseHoldingsReturn {
 
       if (!res.ok) {
         let msg = 'Registration failed';
-        try { const d = await res.json(); msg = d.error || msg; } catch {}
+        try { const d = await res.json(); msg = d.detail ? `${d.error}: ${d.detail}` : (d.error || msg); } catch {}
         setLoginError(`${msg} (${res.status})`);
         return;
       }
