@@ -227,7 +227,7 @@ export function useHoldings(): UseHoldingsReturn {
       const res = await authFetch('/api/holdings');
       if (!res.ok) {
         if (res.status === 401) {
- // Double-check session
+          // Double-check session
           const sessionRes = await authFetch('/api/auth/session');
           if (!sessionRes.ok) {
             setProfile(null);
@@ -269,13 +269,14 @@ export function useHoldings(): UseHoldingsReturn {
         }),
       });
 
-      const data = await res.json();
-
       if (!res.ok) {
-        setLoginError(data.error || 'Login failed');
+        let msg = 'Login failed';
+        try { const d = await res.json(); msg = d.error || msg; } catch {}
+        setLoginError(`${msg} (${res.status})`);
         return;
       }
 
+      const data = await res.json();
       if (data.success && data.token) {
         saveToken(data.token);
         setProfile({ id: data.account.id, username: data.account.username });
@@ -283,9 +284,12 @@ export function useHoldings(): UseHoldingsReturn {
         setLoginUsername('');
         setLoginPassword('');
         toast.success(`Welcome back, ${data.account.username}!`);
+      } else {
+        setLoginError('Unexpected response from server');
       }
-    } catch {
-      setLoginError('Network error. Please try again.');
+    } catch (err) {
+      console.error('Login error:', err);
+      setLoginError(`Connection error: ${err instanceof Error ? err.message : 'Unknown'}`);
     } finally {
       setAuthLoading(false);
     }
@@ -307,13 +311,14 @@ export function useHoldings(): UseHoldingsReturn {
         }),
       });
 
-      const data = await res.json();
-
       if (!res.ok) {
-        setLoginError(data.error || 'Registration failed');
+        let msg = 'Registration failed';
+        try { const d = await res.json(); msg = d.error || msg; } catch {}
+        setLoginError(`${msg} (${res.status})`);
         return;
       }
 
+      const data = await res.json();
       if (data.success && data.token) {
         saveToken(data.token);
         setProfile({ id: data.account.id, username: data.account.username });
@@ -323,9 +328,12 @@ export function useHoldings(): UseHoldingsReturn {
         setConfirmPassword('');
         setIsRegisterMode(false);
         toast.success(`Account created! Welcome, ${data.account.username}!`);
+      } else {
+        setLoginError('Unexpected response from server');
       }
-    } catch {
-      setLoginError('Network error. Please try again.');
+    } catch (err) {
+      console.error('Register error:', err);
+      setLoginError(`Connection error: ${err instanceof Error ? err.message : 'Unknown'}`);
     } finally {
       setAuthLoading(false);
     }

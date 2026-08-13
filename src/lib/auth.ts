@@ -23,8 +23,6 @@ export function verifyPassword(password: string, stored: string): boolean {
   return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(verify));
 }
 
-// ── Token generation ──────────────────────────────────────────
-
 export function generateToken(): string {
   return crypto.randomUUID();
 }
@@ -35,11 +33,9 @@ export async function createSession(accountId: string): Promise<string> {
   const token = generateToken();
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + SESSION_MAX_AGE_DAYS);
-
   await prisma.session.create({
     data: { token, accountId, expiresAt },
   });
-
   return token;
 }
 
@@ -47,35 +43,26 @@ export async function deleteSessionByToken(token: string): Promise<void> {
   await prisma.session.deleteMany({ where: { token } });
 }
 
-// ── Extract token from request (cookie OR Authorization header) ─
+// ── Extract token from request (header OR cookie) ────────────
 
-function extractToken(request?: NextRequest): string | null {
-  // 1. Try Authorization header first (most reliable through proxies)
+export async function getCurrentSession(request?: NextRequest) {
+  let token: string | null = null;
+
+  // 1. Try Authorization header (most reliable through proxies)
   const authHeader = request?.headers.get(AUTH_HEADER);
   if (authHeader?.startsWith(AUTH_PREFIX)) {
-    return authHeader.slice(AUTH_PREFIX.length);
+    token = authHeader.slice(AUTH_PREFIX.length);
   }
 
   // 2. Fall back to cookie
-  return null; // Will be checked via cookies() below
-}
-
-async function extractTokenFromCookie(): string | null {
-  try {
-    const cookieStore = await cookies();
-    return cookieStore.get(SESSION_COOKIE)?.value ?? null;
-  } catch {
-    return null;
+  if (!token) {
+    try {
+      const cookieStore = await cookies();
+      token = cookieStore.get(SESSION_COOKIE)?.value ?? null;
+    } catch {
+      // cookies() not available in this context
+    }
   }
-}
-
-// ── Get current session (checks header first, then cookie) ──
-
-export async function getCurrentSession(request?: NextRequest) {
-  // Try Authorization header first
-  const headerToken = extractToken(request);
-  const cookieToken = await extractTokenFromCookie();
-  const token = headerToken || cookieToken;
 
   if (!token) return null;
 
@@ -94,26 +81,20 @@ export async function getCurrentSession(request?: NextRequest) {
   return session;
 }
 
-// ── Cookie helpers (secondary, for page refresh backup) ──────
+// ── Cookie helpers (backup only — token is primary) ──────────
 
 export function setSessionCookie(response: NextResponse, token: string): void {
   response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
-    secure: true,
-    sameSite: 'none',
+    secure: false,
+    sameSite: 'lax',
     maxAge: SESSION_MAX_AGE_DAYS * 24 * 60 * 60,
     path: '/',
   });
 }
 
 export function clearSessionCookie(response: NextResponse): void {
-  response.cookies.set(SESSION_COOKIE, '', {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'none',
-    maxAge: 0,
-    path: '/',
-  });
+  response.cookies.delete(SESSION_COOKIE);
 }
 
 export async function cleanupExpiredSessions() {
