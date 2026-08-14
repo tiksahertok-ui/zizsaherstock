@@ -1,6 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { getAuthenticated, readPortfolio, savePortfolio } from '@/lib/supabase/server'
-import type { HoldingRecord } from '@/lib/supabase/server'
+import { NextRequest } from 'next/server'
+import { getAuthenticated, readPortfolio, savePortfolio, jsonResponse } from '@/lib/supabase/server'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -9,31 +8,31 @@ interface RouteParams {
 // GET /api/holdings/[id]/transactions
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
-    const { user } = await getAuthenticated()
+    const { user, collected } = await getAuthenticated()
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonResponse({ error: 'Unauthorized' }, { status: 401 }, collected)
     }
 
     const { id } = await params
     const holdings = readPortfolio(user)
     const holding = holdings.find((h) => h.id === id)
     if (!holding) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
+      return jsonResponse({ error: 'Holding not found' }, { status: 404 }, collected)
     }
 
-    return NextResponse.json(holding.transactions)
+    return jsonResponse(holding.transactions, undefined, collected)
   } catch (err) {
     console.error('Error fetching transactions:', err)
-    return NextResponse.json({ error: 'Failed to fetch transactions' }, { status: 500 })
+    return jsonResponse({ error: 'Failed to fetch transactions' }, { status: 500 })
   }
 }
 
 // POST /api/holdings/[id]/transactions
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
-    const { supabase, user } = await getAuthenticated()
+    const { supabase, user, collected } = await getAuthenticated()
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonResponse({ error: 'Unauthorized' }, { status: 401 }, collected)
     }
 
     const { id } = await params
@@ -41,21 +40,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const { type, shares, price, date, notes } = body
 
     if (!type || !['BUY', 'SELL'].includes(type)) {
-      return NextResponse.json({ error: 'type must be BUY or SELL' }, { status: 400 })
+      return jsonResponse({ error: 'type must be BUY or SELL' }, { status: 400 })
     }
     const intShares = Math.round(shares)
     if (isNaN(intShares) || intShares <= 0 || price <= 0 || !date) {
-      return NextResponse.json({ error: 'Invalid transaction data' }, { status: 400 })
+      return jsonResponse({ error: 'Invalid transaction data' }, { status: 400 })
     }
 
     const holdings = readPortfolio(user)
     const holding = holdings.find((h) => h.id === id)
     if (!holding) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
+      return jsonResponse({ error: 'Holding not found' }, { status: 404 }, collected)
     }
 
     if (type === 'SELL' && intShares > holding.shares) {
-      return NextResponse.json(
+      return jsonResponse(
         { error: `Insufficient shares. You hold ${holding.shares} but tried to sell ${intShares}` },
         { status: 400 },
       )
@@ -90,9 +89,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     holding.updatedAt = now
 
     await savePortfolio(supabase, holdings)
-    return NextResponse.json(tx, { status: 201 })
+    return jsonResponse(tx, { status: 201 }, collected)
   } catch (err) {
     console.error('Error creating transaction:', err)
-    return NextResponse.json({ error: 'Failed to create transaction' }, { status: 500 })
+    return jsonResponse({ error: 'Failed to create transaction' }, { status: 500 })
   }
 }

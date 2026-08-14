@@ -1,22 +1,21 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, jsonResponse } from '@/lib/supabase/server'
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
+    const { supabase, collected } = await createClient()
     const { email, password } = await request.json()
 
     if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 })
+      return jsonResponse({ error: 'Email and password are required' }, { status: 400 })
     }
 
     const trimmed = email.trim().toLowerCase()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-      return NextResponse.json({ error: 'Please enter a valid email address' }, { status: 400 })
+      return jsonResponse({ error: 'Please enter a valid email address' }, { status: 400 })
     }
 
     if (password.length < 6) {
-      return NextResponse.json({ error: 'Password must be at least 6 characters' }, { status: 400 })
+      return jsonResponse({ error: 'Password must be at least 6 characters' }, { status: 400 })
     }
 
     const { data, error } = await supabase.auth.signUp({
@@ -26,21 +25,20 @@ export async function POST(request: Request) {
     })
 
     if (error) {
-      return NextResponse.json({ error: error.message, detail: error.code }, { status: error.status || 400 })
+      return jsonResponse({ error: error.message, detail: error.code }, { status: error.status || 400 }, collected)
     }
 
     if (!data.user) {
-      return NextResponse.json({ error: 'Registration failed' }, { status: 500 })
+      return jsonResponse({ error: 'Registration failed' }, { status: 500 }, collected)
     }
 
-    return NextResponse.json({
+    return jsonResponse({
       success: true,
       account: { id: data.user.id, email: data.user.email },
       emailConfirmationRequired: !data.user.confirmed_at,
-    })
-  }
- catch (err) {
+    }, undefined, collected)
+  } catch (err) {
     console.error('Register error:', err)
-    return NextResponse.json({ error: 'Registration failed' }, { status: 500 })
+    return jsonResponse({ error: 'Registration failed' }, { status: 500 })
   }
 }

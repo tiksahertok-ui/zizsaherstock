@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { createClient } from '@/lib/supabase/client'
 
 import type {
   Holding, Transaction, StoredHolding,
@@ -133,16 +132,15 @@ export function useHoldings(): UseHoldingsReturn {
   const [formTxDate, setFormTxDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [formTxNotes, setFormTxNotes] = useState('')
 
-  // ── Check session on mount (client-side Supabase) ──
+  // ── Check session on mount via API (no client-side Supabase) ──
   useEffect(() => {
     let cancelled = false
     async function check() {
       try {
-        const supabase = createClient()
-        const { data: { session } } = await supabase.auth.getSession()
+        const { ok, status, data } = await apiFetch<{ authenticated: boolean; account?: { id: string; email: string } }>('/api/auth/session')
         if (cancelled) return
-        if (session?.user) {
-          setProfile({ id: session.user.id, email: session.user.email! })
+        if (ok && data.authenticated && data.account) {
+          setProfile({ id: data.account.id, email: data.account.email })
           setAuthenticated(true)
         }
       } catch { /* not auth */ }
@@ -165,21 +163,25 @@ export function useHoldings(): UseHoldingsReturn {
 
   useEffect(() => { if (authenticated) fetchHoldings() }, [authenticated, fetchHoldings])
 
-  // ── Login (client-side Supabase Auth) ─────────────────────
+  // ── Login via API route (server-side Supabase) ──────────
   const handleLogin = useCallback(async () => {
     setLoginError(''); setAuthLoading(true)
     try {
-      const supabase = createClient()
-      const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail.trim(), password: loginPassword })
-      if (error) {
-        if (error.code === 'email_not_confirmed') {
-          setLoginError('يرجى تأكيد بريدك الإلكتروني أولاً. تحقق من صندوق الوارد.')
+      const { ok, status, data } = await apiFetch<{ success: boolean; account?: { id: string; email: string }; error?: string }>('/api/auth/login', {
+        method: 'POST', body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
+      })
+      if (!ok || !data.success) {
+        const msg = data?.error || 'فشل تسجيل الدخول'
+        if (status === 401 || msg.includes('Invalid login') || msg.includes('email not confirmed')) {
+          setLoginError(msg.includes('confirm') ? 'يرجى تأكيد بريدك الإلكتروني أولاً. تحقق من صندوق الوارد.' : 'البريد الإلكتروني أو كلمة المرور غير صحيحة')
         } else {
-          setLoginError('البريد الإلكتروني أو كلمة المرور غير صحيحة')
+          setLoginError(msg)
         }
         return
       }
-      setProfile({ id: data.user.id, email: data.user.email! })
+      if (data.account) {
+        setProfile({ id: data.account.id, email: data.account.email })
+      }
       setAuthenticated(true)
       setLoginEmail(''); setLoginPassword('')
       toast.success('مرحباً بعودتك!')
@@ -188,29 +190,28 @@ export function useHoldings(): UseHoldingsReturn {
     } finally { setAuthLoading(false) }
   }, [loginEmail, loginPassword])
 
-  // ── Register (client-side Supabase Auth) ──────────────────
+  // ── Register via API route (server-side Supabase) ────────
   const handleRegister = useCallback(async () => {
     setLoginError(''); setAuthLoading(true)
     try {
-      const supabase = createClient()
-      const { data, error } = await supabase.auth.signUp({
-        email: loginEmail.trim(), password: loginPassword,
-        options: { data: { portfolio: { holdings: [] } } },
+      const { ok, status, data } = await apiFetch<{ success: boolean; account?: { id: string; email: string }; emailConfirmationRequired?: boolean; error?: string; detail?: string }>('/api/auth/register', {
+        method: 'POST', body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
       })
-      if (error) {
-        if (error.code === 'email_address_invalid') {
+      if (!ok || !data.success) {
+        const msg = data?.error || 'فشل إنشاء الحساب'
+        if (data?.detail === 'email_address_invalid') {
           setLoginError('يرجى استخدام بريد إلكتروني حقيقي (Gmail, Outlook, إلخ)')
         } else {
-          setLoginError(error.message)
+          setLoginError(msg)
         }
         return
       }
-      if (data.user && !data.user.confirmed_at) {
+      if (data.emailConfirmationRequired) {
         toast.success('تم إنشاء الحساب! تحقق من بريدك الإلكتروني لتأكيد الحساب.')
         setLoginEmail(''); setLoginPassword(''); setConfirmPassword('')
         setIsRegisterMode(false)
-      } else if (data.session) {
-        setProfile({ id: data.user.id, email: data.user.email! })
+      } else if (data.account) {
+        setProfile({ id: data.account.id, email: data.account.email })
         setAuthenticated(true)
         setLoginEmail(''); setLoginPassword(''); setConfirmPassword('')
         setIsRegisterMode(false)
@@ -221,9 +222,9 @@ export function useHoldings(): UseHoldingsReturn {
     } finally { setAuthLoading(false) }
   }, [loginEmail, loginPassword])
 
-  // ── Logout (client-side Supabase Auth) ────────────────────
+  // ── Logout via API route (server-side Supabase) ──────────
   const handleLogout = useCallback(async () => {
-    try { await createClient().auth.signOut() } catch { /* best-effort */ }
+    try { await apiFetch('/api/auth/logout', { method: 'POST' }) } catch { /* best-effort */ }
     finally {
       setProfile(null); setAuthenticated(false); setHoldings([])
       setAddDialogOpen(false); setEditDialogOpen(false)

@@ -1,6 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { getAuthenticated, readPortfolio, savePortfolio } from '@/lib/supabase/server'
-import type { HoldingRecord } from '@/lib/supabase/server'
+import { NextRequest } from 'next/server'
+import { getAuthenticated, readPortfolio, savePortfolio, jsonResponse } from '@/lib/supabase/server'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -9,9 +8,9 @@ interface RouteParams {
 // GET /api/holdings/[id]
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
-    const { user } = await getAuthenticated()
+    const { user, collected } = await getAuthenticated()
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonResponse({ error: 'Unauthorized' }, { status: 401 }, collected)
     }
 
     const { id } = await params
@@ -19,22 +18,22 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const holding = holdings.find((h) => h.id === id)
 
     if (!holding) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
+      return jsonResponse({ error: 'Holding not found' }, { status: 404 }, collected)
     }
 
-    return NextResponse.json(holding)
+    return jsonResponse(holding, undefined, collected)
   } catch (err) {
     console.error('Error fetching holding:', err)
-    return NextResponse.json({ error: 'Failed to fetch holding' }, { status: 500 })
+    return jsonResponse({ error: 'Failed to fetch holding' }, { status: 500 })
   }
 }
 
 // PUT /api/holdings/[id]
 export async function PUT(request: NextRequest, { params }: RouteParams) {
   try {
-    const { supabase, user } = await getAuthenticated()
+    const { supabase, user, collected } = await getAuthenticated()
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonResponse({ error: 'Unauthorized' }, { status: 401 }, collected)
     }
 
     const { id } = await params
@@ -44,18 +43,18 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     const holdings = readPortfolio(user)
     const idx = holdings.findIndex((h) => h.id === id)
     if (idx === -1) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
+      return jsonResponse({ error: 'Holding not found' }, { status: 404 }, collected)
     }
 
     const holding = holdings[idx]
     if (name !== undefined) holding.name = name.trim()
     if (shares !== undefined) {
       const s = Math.round(shares)
-      if (s <= 0) return NextResponse.json({ error: 'Invalid shares' }, { status: 400 })
+      if (s <= 0) return jsonResponse({ error: 'Invalid shares' }, { status: 400 })
       holding.shares = s
     }
     if (avgCost !== undefined) {
-      if (avgCost <= 0) return NextResponse.json({ error: 'Invalid avgCost' }, { status: 400 })
+      if (avgCost <= 0) return jsonResponse({ error: 'Invalid avgCost' }, { status: 400 })
       holding.avgCost = avgCost
     }
     if (purchaseDate !== undefined) {
@@ -67,35 +66,35 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     holdings[idx] = holding
     await savePortfolio(supabase, holdings)
 
-    return NextResponse.json(holding)
+    return jsonResponse(holding, undefined, collected)
   } catch (err) {
     console.error('Error updating holding:', err)
-    return NextResponse.json({ error: 'Failed to update holding' }, { status: 500 })
+    return jsonResponse({ error: 'Failed to update holding' }, { status: 500 })
   }
 }
 
 // DELETE /api/holdings/[id]
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
-    const { supabase, user } = await getAuthenticated()
+    const { supabase, user, collected } = await getAuthenticated()
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonResponse({ error: 'Unauthorized' }, { status: 401 }, collected)
     }
 
     const { id } = await params
     const holdings = readPortfolio(user)
     const idx = holdings.findIndex((h) => h.id === id)
     if (idx === -1) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
+      return jsonResponse({ error: 'Holding not found' }, { status: 404 }, collected)
     }
 
     const deleted = holdings[idx].symbol
     holdings.splice(idx, 1)
     await savePortfolio(supabase, holdings)
 
-    return NextResponse.json({ success: true, deleted })
+    return jsonResponse({ success: true, deleted }, undefined, collected)
   } catch (err) {
     console.error('Error deleting holding:', err)
-    return NextResponse.json({ error: 'Failed to delete holding' }, { status: 500 })
+    return jsonResponse({ error: 'Failed to delete holding' }, { status: 500 })
   }
 }

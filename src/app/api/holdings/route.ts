@@ -1,48 +1,48 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { getAuthenticated, readPortfolio, savePortfolio } from '@/lib/supabase/server'
+import { NextRequest } from 'next/server'
+import { getAuthenticated, readPortfolio, savePortfolio, jsonResponse } from '@/lib/supabase/server'
 import type { HoldingRecord } from '@/lib/supabase/server'
 
 // GET /api/holdings
 export async function GET() {
   try {
-    const { user } = await getAuthenticated()
+    const { user, collected } = await getAuthenticated()
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonResponse({ error: 'Unauthorized' }, { status: 401 }, collected)
     }
 
     const holdings = readPortfolio(user)
-    return NextResponse.json({ holdings })
+    return jsonResponse({ holdings }, undefined, collected)
   } catch (err) {
     console.error('Error fetching holdings:', err)
-    return NextResponse.json({ error: 'Failed to fetch holdings' }, { status: 500 })
+    return jsonResponse({ error: 'Failed to fetch holdings' }, { status: 500 })
   }
 }
 
 // POST /api/holdings
 export async function POST(request: NextRequest) {
   try {
-    const { supabase, user } = await getAuthenticated()
+    const { supabase, user, collected } = await getAuthenticated()
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonResponse({ error: 'Unauthorized' }, { status: 401 }, collected)
     }
 
     const body = await request.json()
     const { symbol, name, shares, avgCost, purchaseDate, transaction } = body
 
     if (!symbol || !name || !shares || !avgCost) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+      return jsonResponse({ error: 'Missing required fields' }, { status: 400 })
     }
 
     const intShares = Math.round(shares)
     if (isNaN(intShares) || intShares <= 0 || avgCost <= 0) {
-      return NextResponse.json({ error: 'Invalid shares or avgCost' }, { status: 400 })
+      return jsonResponse({ error: 'Invalid shares or avgCost' }, { status: 400 })
     }
 
     const upperSymbol = symbol.trim().toUpperCase()
     const holdings = readPortfolio(user)
 
     if (holdings.some((h) => h.symbol === upperSymbol)) {
-      return NextResponse.json({ error: `"${upperSymbol}" already exists in your portfolio` }, { status: 409 })
+      return jsonResponse({ error: `"${upperSymbol}" already exists in your portfolio` }, { status: 409 })
     }
 
     const now = new Date().toISOString()
@@ -53,20 +53,6 @@ export async function POST(request: NextRequest) {
     }
 
     const txId = crypto.randomUUID()
-    const transactions = transaction
-      ? [{
-          id: txId,
-          holdingId: crypto.randomUUID(),
-          type: transaction.type || 'BUY',
-          shares: transaction.shares || intShares,
-          price: transaction.price || avgCost,
-          total: (transaction.shares || intShares) * (transaction.price || avgCost),
-          date: new Date(transaction.date || parsedDate).toISOString(),
-          notes: transaction.notes || null,
-          createdAt: now,
-        }]
-      : []
-
     const newHolding: HoldingRecord = {
       id: crypto.randomUUID(),
       symbol: upperSymbol,
@@ -76,20 +62,32 @@ export async function POST(request: NextRequest) {
       purchaseDate: parsedDate,
       createdAt: now,
       updatedAt: now,
-      transactions,
+      transactions: transaction
+        ? [{
+            id: txId,
+            holdingId: '', // will be set below
+            type: transaction.type || 'BUY',
+            shares: transaction.shares || intShares,
+            price: transaction.price || avgCost,
+            total: (transaction.shares || intShares) * (transaction.price || avgCost),
+            date: new Date(transaction.date || parsedDate).toISOString(),
+            notes: transaction.notes || null,
+            createdAt: now,
+          }]
+        : [],
     }
 
     // Fix holdingId in transaction
-    if (transactions.length > 0) {
-      transactions[0].holdingId = newHolding.id
+    if (newHolding.transactions.length > 0) {
+      newHolding.transactions[0].holdingId = newHolding.id
     }
 
     holdings.unshift(newHolding)
     await savePortfolio(supabase, holdings)
 
-    return NextResponse.json(newHolding, { status: 201 })
+    return jsonResponse(newHolding, { status: 201 }, collected)
   } catch (err) {
     console.error('Error creating holding:', err)
-    return NextResponse.json({ error: 'Failed to create holding', detail: err instanceof Error ? err.message : String(err) }, { status: 500 })
+    return jsonResponse({ error: 'Failed to create holding', detail: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }
