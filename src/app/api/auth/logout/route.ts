@@ -1,21 +1,13 @@
-import { NextResponse } from 'next/server';
-import { deleteSessionByToken, clearSessionCookie, getCurrentSession } from '@/lib/auth';
-import { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 
-export async function POST(request: NextRequest) {
+export async function POST() {
   try {
-    const session = await getCurrentSession(request);
-    if (session) {
-      await deleteSessionByToken(session.token);
-    }
-    const response = NextResponse.json({ success: true });
-    clearSessionCookie(response);
-    return response;
+    const supabase = await createClient()
+    await supabase.auth.signOut()
+    return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('Logout error:', err);
-    return NextResponse.json(
-      { error: 'Logout failed' },
-      { status: 500 },
-    );
+    console.error('Logout error:', err)
+    return NextResponse.json({ error: 'Logout failed' }, { status: 500 })
   }
 }

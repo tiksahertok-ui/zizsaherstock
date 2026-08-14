@@ -1,108 +1,95 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
-import { getCurrentSession } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server'
+import { getAuthenticated, readPortfolio, savePortfolio } from '@/lib/supabase/server'
+import type { HoldingRecord } from '@/lib/supabase/server'
 
 // GET /api/holdings
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    const session = await getCurrentSession(request);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { user } = await getAuthenticated()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const holdings = await prisma.holding.findMany({
-      where: { accountId: session.account.id },
-      include: { transactions: { orderBy: { date: 'desc' } } },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return NextResponse.json({
-      holdings: holdings.map(h => ({
-        id: h.id, symbol: h.symbol, name: h.name,
-        shares: h.shares, avgCost: h.avgCost,
-        purchaseDate: h.purchaseDate.toISOString(),
-        createdAt: h.createdAt.toISOString(), updatedAt: h.updatedAt.toISOString(),
-        transactions: h.transactions.map(t => ({
-          id: t.id, holdingId: t.holdingId, type: t.type,
-          shares: t.shares, price: t.price, total: t.total,
-          date: t.date.toISOString(), notes: t.notes, createdAt: t.createdAt.toISOString(),
-        })),
-      })),
-    });
+    const holdings = readPortfolio(user)
+    return NextResponse.json({ holdings })
   } catch (err) {
-    console.error('Error fetching holdings:', err);
-    return NextResponse.json({ error: 'Failed to fetch holdings' }, { status: 500 });
+    console.error('Error fetching holdings:', err)
+    return NextResponse.json({ error: 'Failed to fetch holdings' }, { status: 500 })
   }
 }
 
 // POST /api/holdings
 export async function POST(request: NextRequest) {
   try {
-    const session = await getCurrentSession(request);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { supabase, user } = await getAuthenticated()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const body = await request.json();
-    const { symbol, name, shares, avgCost, purchaseDate, transaction } = body;
+    const body = await request.json()
+    const { symbol, name, shares, avgCost, purchaseDate, transaction } = body
 
     if (!symbol || !name || !shares || !avgCost) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
-    const intShares = Math.round(shares);
+    const intShares = Math.round(shares)
     if (isNaN(intShares) || intShares <= 0 || avgCost <= 0) {
-      return NextResponse.json({ error: 'Invalid shares or avgCost' }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid shares or avgCost' }, { status: 400 })
     }
 
-    const upperSymbol = symbol.trim().toUpperCase();
+    const upperSymbol = symbol.trim().toUpperCase()
+    const holdings = readPortfolio(user)
 
-    const existing = await prisma.holding.findFirst({
-      where: { accountId: session.account.id, symbol: upperSymbol },
-    });
-    if (existing) {
-      return NextResponse.json({ error: `"${upperSymbol}" already exists in your portfolio` }, { status: 409 });
+    if (holdings.some((h) => h.symbol === upperSymbol)) {
+      return NextResponse.json({ error: `"${upperSymbol}" already exists in your portfolio` }, { status: 409 })
     }
 
-    let parsedDate = new Date();
+    const now = new Date().toISOString()
+    let parsedDate = now
     if (purchaseDate) {
-      const d = new Date(purchaseDate);
-      if (!isNaN(d.getTime())) parsedDate = d;
+      const d = new Date(purchaseDate)
+      if (!isNaN(d.getTime())) parsedDate = d.toISOString()
     }
 
-    const holding = await prisma.holding.create({
-      data: {
-        symbol: upperSymbol, name: name.trim(),
-        shares: intShares, avgCost,
-        purchaseDate: parsedDate,
-        accountId: session.account.id,
-        transactions: transaction ? {
-          create: {
-            type: transaction.type || 'BUY',
-            shares: transaction.shares || intShares,
-            price: transaction.price || avgCost,
-            total: (transaction.shares || intShares) * (transaction.price || avgCost),
-            date: new Date(transaction.date || parsedDate),
-            notes: transaction.notes || null,
-          },
-        } : undefined,
-      },
-      include: { transactions: { orderBy: { date: 'desc' } } },
-    });
+    const txId = crypto.randomUUID()
+    const transactions = transaction
+      ? [{
+          id: txId,
+          holdingId: crypto.randomUUID(),
+          type: transaction.type || 'BUY',
+          shares: transaction.shares || intShares,
+          price: transaction.price || avgCost,
+          total: (transaction.shares || intShares) * (transaction.price || avgCost),
+          date: new Date(transaction.date || parsedDate).toISOString(),
+          notes: transaction.notes || null,
+          createdAt: now,
+        }]
+      : []
 
-    return NextResponse.json({
-      id: holding.id, symbol: holding.symbol, name: holding.name,
-      shares: holding.shares, avgCost: holding.avgCost,
-      purchaseDate: holding.purchaseDate.toISOString(),
-      createdAt: holding.createdAt.toISOString(), updatedAt: holding.updatedAt.toISOString(),
-      transactions: holding.transactions.map(t => ({
-        id: t.id, holdingId: t.holdingId, type: t.type,
-        shares: t.shares, price: t.price, total: t.total,
-        date: t.date.toISOString(), notes: t.notes, createdAt: t.createdAt.toISOString(),
-      })),
-    }, { status: 201 });
+    const newHolding: HoldingRecord = {
+      id: crypto.randomUUID(),
+      symbol: upperSymbol,
+      name: name.trim(),
+      shares: intShares,
+      avgCost,
+      purchaseDate: parsedDate,
+      createdAt: now,
+      updatedAt: now,
+      transactions,
+    }
+
+    // Fix holdingId in transaction
+    if (transactions.length > 0) {
+      transactions[0].holdingId = newHolding.id
+    }
+
+    holdings.unshift(newHolding)
+    await savePortfolio(supabase, holdings)
+
+    return NextResponse.json(newHolding, { status: 201 })
   } catch (err) {
-    console.error('Error creating holding:', err);
-    return NextResponse.json({ error: 'Failed to create holding' }, { status: 500 });
+    console.error('Error creating holding:', err)
+    return NextResponse.json({ error: 'Failed to create holding', detail: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }

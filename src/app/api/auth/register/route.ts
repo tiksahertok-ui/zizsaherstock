@@ -1,71 +1,46 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
-import { hashPassword, setSessionCookie } from '@/lib/auth';
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 
 export async function POST(request: Request) {
   try {
-    const { email, password } = await request.json();
+    const supabase = await createClient()
+    const { email, password } = await request.json()
 
     if (!email || !password) {
-      return NextResponse.json(
-        { error: 'Email and password are required' },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 })
     }
 
-    const trimmed = email.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(trimmed)) {
-      return NextResponse.json(
-        { error: 'Please enter a valid email address' },
-        { status: 400 },
-      );
+    const trimmed = email.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      return NextResponse.json({ error: 'Please enter a valid email address' }, { status: 400 })
     }
 
     if (password.length < 6) {
-      return NextResponse.json(
-        { error: 'Password must be at least 6 characters' },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'Password must be at least 6 characters' }, { status: 400 })
     }
 
-    const existing = await prisma.account.findUnique({
-      where: { email: trimmed },
-    });
+    const { data, error } = await supabase.auth.signUp({
+      email: trimmed,
+      password,
+      options: { data: { portfolio: { holdings: [] } } },
+    })
 
-    if (existing) {
-      return NextResponse.json(
-        { error: 'An account with this email already exists' },
-        { status: 409 },
-      );
+    if (error) {
+      return NextResponse.json({ error: error.message, detail: error.code }, { status: error.status || 400 })
     }
 
-    const hashedPassword = hashPassword(password);
-    const account = await prisma.account.create({
-      data: { email: trimmed, password: hashedPassword },
-    });
+    if (!data.user) {
+      return NextResponse.json({ error: 'Registration failed' }, { status: 500 })
+    }
 
-    // Create session
-    const token = crypto.randomUUID();
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
-
-    await prisma.session.create({
-      data: { token, accountId: account.id, expiresAt },
-    });
-
-    const response = NextResponse.json({
+    return NextResponse.json({
       success: true,
-      account: { id: account.id, email: account.email },
-    });
-    setSessionCookie(response, token);
-    return response;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('Register error:', err);
-    return NextResponse.json(
-      { error: 'Registration failed', detail: message },
-      { status: 500 },
-    );
+      account: { id: data.user.id, email: data.user.email },
+      emailConfirmationRequired: !data.user.confirmed_at,
+    })
+  }
+ catch (err) {
+    console.error('Register error:', err)
+    return NextResponse.json({ error: 'Registration failed' }, { status: 500 })
   }
 }

@@ -1,123 +1,101 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
-import { getCurrentSession } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server'
+import { getAuthenticated, readPortfolio, savePortfolio } from '@/lib/supabase/server'
+import type { HoldingRecord } from '@/lib/supabase/server'
 
 interface RouteParams {
-  params: Promise<{ id: string }>;
+  params: Promise<{ id: string }>
 }
 
 // GET /api/holdings/[id]
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession(request);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { user } = await getAuthenticated()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = await params;
-    const holding = await prisma.holding.findFirst({
-      where: { id, accountId: session.account.id },
-      include: { transactions: { orderBy: { date: 'desc' } } },
-    });
+    const { id } = await params
+    const holdings = readPortfolio(user)
+    const holding = holdings.find((h) => h.id === id)
 
     if (!holding) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
     }
 
-    return NextResponse.json({
-      id: holding.id, symbol: holding.symbol, name: holding.name,
-      shares: holding.shares, avgCost: holding.avgCost,
-      purchaseDate: holding.purchaseDate.toISOString(),
-      createdAt: holding.createdAt.toISOString(), updatedAt: holding.updatedAt.toISOString(),
-      transactions: holding.transactions.map(t => ({
-        id: t.id, holdingId: t.holdingId, type: t.type,
-        shares: t.shares, price: t.price, total: t.total,
-        date: t.date.toISOString(), notes: t.notes, createdAt: t.createdAt.toISOString(),
-      })),
-    });
+    return NextResponse.json(holding)
   } catch (err) {
-    console.error('Error fetching holding:', err);
-    return NextResponse.json({ error: 'Failed to fetch holding' }, { status: 500 });
+    console.error('Error fetching holding:', err)
+    return NextResponse.json({ error: 'Failed to fetch holding' }, { status: 500 })
   }
 }
 
 // PUT /api/holdings/[id]
 export async function PUT(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession(request);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { supabase, user } = await getAuthenticated()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = await params;
-    const body = await request.json();
-    const { shares, avgCost, name, purchaseDate } = body;
+    const { id } = await params
+    const body = await request.json()
+    const { shares, avgCost, name, purchaseDate } = body
 
-    const existing = await prisma.holding.findFirst({
-      where: { id, accountId: session.account.id },
-    });
-    if (!existing) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 });
+    const holdings = readPortfolio(user)
+    const idx = holdings.findIndex((h) => h.id === id)
+    if (idx === -1) {
+      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
     }
 
-    const updateData: Record<string, unknown> = {};
-    if (name !== undefined) updateData.name = name.trim();
+    const holding = holdings[idx]
+    if (name !== undefined) holding.name = name.trim()
     if (shares !== undefined) {
-      const s = Math.round(shares);
-      if (s <= 0) return NextResponse.json({ error: 'Invalid shares' }, { status: 400 });
-      updateData.shares = s;
+      const s = Math.round(shares)
+      if (s <= 0) return NextResponse.json({ error: 'Invalid shares' }, { status: 400 })
+      holding.shares = s
     }
     if (avgCost !== undefined) {
-      if (avgCost <= 0) return NextResponse.json({ error: 'Invalid avgCost' }, { status: 400 });
-      updateData.avgCost = avgCost;
+      if (avgCost <= 0) return NextResponse.json({ error: 'Invalid avgCost' }, { status: 400 })
+      holding.avgCost = avgCost
     }
     if (purchaseDate !== undefined) {
-      const d = new Date(purchaseDate);
-      if (!isNaN(d.getTime())) updateData.purchaseDate = d;
+      const d = new Date(purchaseDate)
+      if (!isNaN(d.getTime())) holding.purchaseDate = d.toISOString()
     }
+    holding.updatedAt = new Date().toISOString()
 
-    if (Object.keys(updateData).length === 0) {
-      return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
-    }
+    holdings[idx] = holding
+    await savePortfolio(supabase, holdings)
 
-    const holding = await prisma.holding.update({
-      where: { id },
-      data: updateData,
-    });
-
-    return NextResponse.json({
-      id: holding.id, symbol: holding.symbol, name: holding.name,
-      shares: holding.shares, avgCost: holding.avgCost,
-      purchaseDate: holding.purchaseDate.toISOString(),
-      createdAt: holding.createdAt.toISOString(), updatedAt: holding.updatedAt.toISOString(),
-    });
+    return NextResponse.json(holding)
   } catch (err) {
-    console.error('Error updating holding:', err);
-    return NextResponse.json({ error: 'Failed to update holding' }, { status: 500 });
+    console.error('Error updating holding:', err)
+    return NextResponse.json({ error: 'Failed to update holding' }, { status: 500 })
   }
 }
 
 // DELETE /api/holdings/[id]
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
-    const session = await getCurrentSession(request);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { supabase, user } = await getAuthenticated()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = await params;
-    const existing = await prisma.holding.findFirst({
-      where: { id, accountId: session.account.id },
-    });
-    if (!existing) {
-      return NextResponse.json({ error: 'Holding not found' }, { status: 404 });
+    const { id } = await params
+    const holdings = readPortfolio(user)
+    const idx = holdings.findIndex((h) => h.id === id)
+    if (idx === -1) {
+      return NextResponse.json({ error: 'Holding not found' }, { status: 404 })
     }
 
-    await prisma.holding.delete({ where: { id } });
+    const deleted = holdings[idx].symbol
+    holdings.splice(idx, 1)
+    await savePortfolio(supabase, holdings)
 
-    return NextResponse.json({ success: true, deleted: existing.symbol });
+    return NextResponse.json({ success: true, deleted })
   } catch (err) {
-    console.error('Error deleting holding:', err);
-    return NextResponse.json({ error: 'Failed to delete holding' }, { status: 500 });
+    console.error('Error deleting holding:', err)
+    return NextResponse.json({ error: 'Failed to delete holding' }, { status: 500 })
   }
 }

@@ -1,51 +1,31 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
-import { verifyPassword, setSessionCookie } from '@/lib/auth';
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 
 export async function POST(request: Request) {
   try {
-    const { email, password } = await request.json();
+    const supabase = await createClient()
+    const { email, password } = await request.json()
 
     if (!email || !password) {
-      return NextResponse.json(
-        { error: 'Email and password are required' },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 })
     }
 
-    const account = await prisma.account.findUnique({
-      where: { email: email.trim().toLowerCase() },
-    });
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    })
 
-    if (!account || !verifyPassword(password, account.password)) {
-      return NextResponse.json(
-        { error: 'Invalid email or password' },
-        { status: 401 },
-      );
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: error.status || 401 })
     }
 
-    // Delete old sessions & create new one
-    await prisma.session.deleteMany({ where: { accountId: account.id } });
-    const token = crypto.randomUUID();
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
-
-    await prisma.session.create({
-      data: { token, accountId: account.id, expiresAt },
-    });
-
-    const response = NextResponse.json({
+    return NextResponse.json({
       success: true,
-      account: { id: account.id, email: account.email },
-    });
-    setSessionCookie(response, token);
-    return response;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('Login error:', err);
-    return NextResponse.json(
-      { error: 'Login failed', detail: message },
-      { status: 500 },
-    );
+      account: { id: data.user.id, email: data.user.email },
+    })
+  }
+ catch (err) {
+    console.error('Login error:', err)
+    return NextResponse.json({ error: 'Login failed' }, { status: 500 })
   }
 }
