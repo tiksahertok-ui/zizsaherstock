@@ -9,14 +9,11 @@ import type {
   StockOption, PortfolioSummary, SortField, SortDir,
 } from '@/types'
 
-// ── Profile type ──────────────────────────────────────────────
-export interface Profile {
-  id: string
-  email: string
-}
+// ── localStorage keys ──────────────────────────────────────────
+const LS_KEY = 'egx_portfolio_holdings'
 
-// ── DB response shape (matches API) ───────────────────────────
-interface DbHolding {
+// ── Stored shape (matches old DbHolding) ───────────────────────
+interface LsHolding {
   id: string
   symbol: string
   name: string
@@ -25,10 +22,10 @@ interface DbHolding {
   purchaseDate: string
   createdAt: string
   updatedAt: string
-  transactions: DbTransaction[]
+  transactions: LsTransaction[]
 }
 
-interface DbTransaction {
+interface LsTransaction {
   id: string
   holdingId: string
   type: string
@@ -40,7 +37,7 @@ interface DbTransaction {
   createdAt: string
 }
 
-function toStoredHolding(db: DbHolding): StoredHolding {
+function toStoredHolding(db: LsHolding): StoredHolding {
   return {
     ...db,
     currentPrice: db.avgCost,
@@ -54,21 +51,24 @@ function toStoredHolding(db: DbHolding): StoredHolding {
   }
 }
 
-// ── Simple fetch helper (credentials for cookies) ──
-async function apiFetch<T = unknown>(url: string, options: RequestInit = {}): Promise<{ ok: boolean; status: number; data: T }> {
-  const headers = new Headers(options.headers || {})
-  if (!headers.has('Content-Type') && options.body) {
-    headers.set('Content-Type', 'application/json')
-  }
-  const res = await fetch(url, { ...options, headers, credentials: 'include' })
-  let data: T
-  try { data = await res.json() } catch { data = undefined as T }
-  return { ok: res.ok, status: res.status, data }
+function loadFromLS(): LsHolding[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(LS_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+function saveToLS(holdings: LsHolding[]) {
+  if (typeof window === 'undefined') return
+  try { localStorage.setItem(LS_KEY, JSON.stringify(holdings)) } catch { /* quota */ }
 }
 
 // ── Return type ───────────────────────────────────────────────
 export interface UseHoldingsReturn {
-  profile: Profile | null; authenticated: boolean; hydrated: boolean
+  profile: { id: string; email: string } | null
+  authenticated: boolean
+  hydrated: boolean
   isRegisterMode: boolean; setIsRegisterMode: (v: boolean) => void
   loginEmail: string; setLoginEmail: (v: string) => void
   loginPassword: string; setLoginPassword: (v: string) => void
@@ -103,16 +103,8 @@ export interface UseHoldingsReturn {
 
 // ── Hook ──────────────────────────────────────────────────────
 export function useHoldings(): UseHoldingsReturn {
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [authenticated, setAuthenticated] = useState(false)
   const [hydrated, setHydrated] = useState(false)
-  const [authLoading, setAuthLoading] = useState(false)
-  const [isRegisterMode, setIsRegisterMode] = useState(false)
-  const [loginEmail, setLoginEmail] = useState('')
-  const [loginPassword, setLoginPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [loginError, setLoginError] = useState('')
-  const [holdings, setHoldings] = useState<StoredHolding[]>([])
+  const [holdings, setHoldingsRaw] = useState<StoredHolding[]>([])
   const [loading, setLoading] = useState(false)
   const [sortField, setSortField] = useState<SortField>('marketValue')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -132,107 +124,33 @@ export function useHoldings(): UseHoldingsReturn {
   const [formTxDate, setFormTxDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [formTxNotes, setFormTxNotes] = useState('')
 
-  // ── Check session on mount via API (no client-side Supabase) ──
+  // ── Hydrate from localStorage on mount ──
   useEffect(() => {
-    let cancelled = false
-    async function check() {
-      try {
-        const { ok, status, data } = await apiFetch<{ authenticated: boolean; account?: { id: string; email: string } }>('/api/auth/session')
-        if (cancelled) return
-        if (ok && data.authenticated && data.account) {
-          setProfile({ id: data.account.id, email: data.account.email })
-          setAuthenticated(true)
-        }
-      } catch { /* not auth */ }
-      finally { if (!cancelled) setHydrated(true) }
-    }
-    check()
-    return () => { cancelled = true }
+    const loaded = loadFromLS().map(toStoredHolding)
+    setHoldingsRaw(loaded)
+    setHydrated(true)
   }, [])
 
-  // ── Fetch holdings ──────────────────────────────────────────
-  const fetchHoldings = useCallback(async () => {
-    setLoading(true)
-    try {
-      const { ok, status, data } = await apiFetch<{ holdings?: DbHolding[] }>('/api/holdings')
-      if (!ok) { if (status === 401) { setProfile(null); setAuthenticated(false); setHoldings([]) }; return }
-      setHoldings(((data as { holdings?: DbHolding[] }).holdings ?? []).map(toStoredHolding))
-    } catch (err) { console.error('fetchHoldings:', err); toast.error('Failed to load holdings') }
-    finally { setLoading(false) }
+  // ── Persist to localStorage whenever holdings change ──
+  const setHoldings: React.Dispatch<React.SetStateAction<StoredHolding[]>> = useCallback((action) => {
+    setHoldingsRaw((prev) => {
+      const next = typeof action === 'function' ? action(prev) : action
+      // Strip computed fields before saving
+      const toSave: LsHolding[] = next.map((h) => ({
+        id: h.id, symbol: h.symbol, name: h.name, shares: h.shares, avgCost: h.avgCost,
+        purchaseDate: h.purchaseDate, createdAt: h.createdAt, updatedAt: h.updatedAt,
+        transactions: h.transactions.map((t) => ({
+          id: t.id, holdingId: t.holdingId, type: t.type, shares: t.shares,
+          price: t.price, total: t.total, date: t.date, notes: t.notes, createdAt: t.createdAt,
+        })),
+      }))
+      saveToLS(toSave)
+      return next
+    })
   }, [])
 
-  useEffect(() => { if (authenticated) fetchHoldings() }, [authenticated, fetchHoldings])
-
-  // ── Login via API route (server-side Supabase) ──────────
-  const handleLogin = useCallback(async () => {
-    setLoginError(''); setAuthLoading(true)
-    try {
-      const { ok, status, data } = await apiFetch<{ success: boolean; account?: { id: string; email: string }; error?: string }>('/api/auth/login', {
-        method: 'POST', body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
-      })
-      if (!ok || !data.success) {
-        const msg = data?.error || 'فشل تسجيل الدخول'
-        if (status === 401 || msg.includes('Invalid login') || msg.includes('email not confirmed')) {
-          setLoginError(msg.includes('confirm') ? 'يرجى تأكيد بريدك الإلكتروني أولاً. تحقق من صندوق الوارد.' : 'البريد الإلكتروني أو كلمة المرور غير صحيحة')
-        } else {
-          setLoginError(msg)
-        }
-        return
-      }
-      if (data.account) {
-        setProfile({ id: data.account.id, email: data.account.email })
-      }
-      setAuthenticated(true)
-      setLoginEmail(''); setLoginPassword('')
-      toast.success('مرحباً بعودتك!')
-    } catch (err) {
-      setLoginError(`خطأ في الاتصال: ${err instanceof Error ? err.message : 'غير معروف'}`)
-    } finally { setAuthLoading(false) }
-  }, [loginEmail, loginPassword])
-
-  // ── Register via API route (server-side Supabase) ────────
-  const handleRegister = useCallback(async () => {
-    setLoginError(''); setAuthLoading(true)
-    try {
-      const { ok, status, data } = await apiFetch<{ success: boolean; account?: { id: string; email: string }; emailConfirmationRequired?: boolean; error?: string; detail?: string }>('/api/auth/register', {
-        method: 'POST', body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
-      })
-      if (!ok || !data.success) {
-        const msg = data?.error || 'فشل إنشاء الحساب'
-        if (data?.detail === 'email_address_invalid') {
-          setLoginError('يرجى استخدام بريد إلكتروني حقيقي (Gmail, Outlook, إلخ)')
-        } else {
-          setLoginError(msg)
-        }
-        return
-      }
-      if (data.emailConfirmationRequired) {
-        toast.success('تم إنشاء الحساب! تحقق من بريدك الإلكتروني لتأكيد الحساب.')
-        setLoginEmail(''); setLoginPassword(''); setConfirmPassword('')
-        setIsRegisterMode(false)
-      } else if (data.account) {
-        setProfile({ id: data.account.id, email: data.account.email })
-        setAuthenticated(true)
-        setLoginEmail(''); setLoginPassword(''); setConfirmPassword('')
-        setIsRegisterMode(false)
-        toast.success('تم إنشاء الحساب بنجاح!')
-      }
-    } catch (err) {
-      setLoginError(`خطأ في الاتصال: ${err instanceof Error ? err.message : 'غير معروف'}`)
-    } finally { setAuthLoading(false) }
-  }, [loginEmail, loginPassword])
-
-  // ── Logout via API route (server-side Supabase) ──────────
-  const handleLogout = useCallback(async () => {
-    try { await apiFetch('/api/auth/logout', { method: 'POST' }) } catch { /* best-effort */ }
-    finally {
-      setProfile(null); setAuthenticated(false); setHoldings([])
-      setAddDialogOpen(false); setEditDialogOpen(false)
-      setDeleteDialogOpen(false); setTxDialogOpen(false)
-      setSelectedHolding(null)
-      toast.success('تم تسجيل الخروج')
-    }
-  }, [])
+  // ── Fetch holdings (no-op, already in state) ──
+  const fetchHoldings = useCallback(async () => { /* local */ }, [])
 
   // ── Sorting ─────────────────────────────────────────────────
   const sortedHoldings = useMemo(() => {
@@ -254,71 +172,99 @@ export function useHoldings(): UseHoldingsReturn {
   }, [])
 
   // ── Add holding ─────────────────────────────────────────────
-  const handleAddHolding = useCallback(async () => {
+  const handleAddHolding = useCallback(() => {
     if (!selectedStock) { toast.error('الرجاء اختيار سهم'); return }
     const shares = parseInt(formShares, 10); const avgCost = parseFloat(formAvgCost)
     if (!shares || shares <= 0 || !avgCost || avgCost <= 0) { toast.error('الرجاء إدخال عدد صحيح وسعر متوسط'); return }
     const purchaseDate = formPurchaseDate || format(new Date(), 'yyyy-MM-dd')
-    try {
-      const { ok, data } = await apiFetch<DbHolding>('/api/holdings', {
-        method: 'POST', body: JSON.stringify({ symbol: selectedStock.symbol, name: selectedStock.name, shares, avgCost, purchaseDate, transaction: { type: 'BUY', shares, price: avgCost, date: purchaseDate } }),
-      })
-      if (!ok) { toast.error((data as { error?: string }).error || 'فشل إضافة السهم'); return }
-      setHoldings((prev) => [toStoredHolding(data as DbHolding), ...prev])
-      setAddDialogOpen(false); resetForm(); toast.success(`تمت إضافة ${selectedStock.symbol} إلى المحفظة`)
-    } catch { toast.error('فشل إضافة السهم') }
-  }, [selectedStock, formShares, formAvgCost, formPurchaseDate])
+    const now = new Date().toISOString()
+    const id = crypto.randomUUID()
+    const txId = crypto.randomUUID()
+
+    const newHolding: StoredHolding = {
+      id, symbol: selectedStock.symbol.trim().toUpperCase(), name: selectedStock.name.trim(),
+      shares, avgCost, purchaseDate: new Date(purchaseDate).toISOString(),
+      createdAt: now, updatedAt: now,
+      currentPrice: avgCost, marketValue: shares * avgCost, costBasis: shares * avgCost,
+      pnl: 0, pnlPercent: 0, dayChange: 0, dayChangePercent: 0,
+      transactions: [{ id: txId, holdingId: id, type: 'BUY', shares, price: avgCost, total: shares * avgCost, date: new Date(purchaseDate).toISOString(), notes: null, createdAt: now }],
+    }
+
+    if (holdings.some((h) => h.symbol === newHolding.symbol)) {
+      toast.error(`"${newHolding.symbol}" موجود بالفعل في المحفظة`)
+      return
+    }
+
+    setHoldings((prev) => [newHolding, ...prev])
+    setAddDialogOpen(false); resetForm()
+    toast.success(`تمت إضافة ${selectedStock.symbol} إلى المحفظة`)
+  }, [selectedStock, formShares, formAvgCost, formPurchaseDate, holdings, setHoldings])
 
   // ── Update holding ──────────────────────────────────────────
-  const handleUpdateHolding = useCallback(async () => {
+  const handleUpdateHolding = useCallback(() => {
     if (!selectedHolding) return
     const shares = parseInt(formShares, 10); const avgCost = parseFloat(formAvgCost)
     if (!shares || shares <= 0 || !avgCost || avgCost <= 0) { toast.error('الرجاء إدخال قيم صحيحة'); return }
-    try {
-      const { ok, data } = await apiFetch<DbHolding>(`/api/holdings/${selectedHolding.id}`, {
-        method: 'PUT', body: JSON.stringify({ shares, avgCost, purchaseDate: formPurchaseDate || undefined }),
-      })
-      if (!ok) { toast.error((data as { error?: string }).error || 'فشل تحديث السهم'); return }
-      setHoldings((prev) => prev.map((h) => { if (h.id !== selectedHolding.id) return h; return toStoredHolding({ ...h, ...data, transactions: h.transactions } as unknown as DbHolding) }))
-      setEditDialogOpen(false); setSelectedHolding(null); toast.success(`تم تحديث ${selectedHolding.symbol}`)
-    } catch { toast.error('فشل تحديث السهم') }
-  }, [selectedHolding, formShares, formAvgCost, formPurchaseDate])
+    const purchaseDate = formPurchaseDate ? new Date(formPurchaseDate).toISOString() : selectedHolding.purchaseDate
+
+    setHoldings((prev) => prev.map((h) => {
+      if (h.id !== selectedHolding.id) return h
+      const updated: StoredHolding = {
+        ...h, shares, avgCost, purchaseDate, updatedAt: new Date().toISOString(),
+        marketValue: shares * avgCost, costBasis: shares * avgCost,
+      }
+      return updated
+    }))
+    setEditDialogOpen(false); setSelectedHolding(null)
+    toast.success(`تم تحديث ${selectedHolding.symbol}`)
+  }, [selectedHolding, formShares, formAvgCost, formPurchaseDate, setHoldings])
 
   // ── Delete holding ──────────────────────────────────────────
-  const handleDeleteHolding = useCallback(async () => {
+  const handleDeleteHolding = useCallback(() => {
     if (!selectedHolding) return
-    try {
-      const { ok, data } = await apiFetch<{ deleted?: string }>(`/api/holdings/${selectedHolding.id}`, { method: 'DELETE' })
-      if (!ok) { toast.error((data as { error?: string }).error || 'فشل حذف السهم'); return }
-      setHoldings((prev) => prev.filter((h) => h.id !== selectedHolding.id))
-      setDeleteDialogOpen(false); setSelectedHolding(null); toast.success(`تم حذف ${(data as { deleted?: string }).deleted || selectedHolding.symbol}`)
-    } catch { toast.error('فشل حذف السهم') }
-  }, [selectedHolding])
+    setHoldings((prev) => prev.filter((h) => h.id !== selectedHolding.id))
+    setDeleteDialogOpen(false); setSelectedHolding(null)
+    toast.success(`تم حذف ${selectedHolding.symbol}`)
+  }, [selectedHolding, setHoldings])
 
   // ── Add transaction ─────────────────────────────────────────
-  const handleAddTransaction = useCallback(async () => {
+  const handleAddTransaction = useCallback(() => {
     if (!selectedHolding) return
     const shares = parseInt(formTxShares, 10); const price = parseFloat(formTxPrice)
     if (!shares || shares <= 0 || !price || price <= 0) { toast.error('الرجاء إدخال قيم صحيحة'); return }
     if (!formTxDate) { toast.error('الرجاء إدخال تاريخ'); return }
-    try {
-      const { ok, data } = await apiFetch(`/api/holdings/${selectedHolding.id}/transactions`, {
-        method: 'POST', body: JSON.stringify({ type: formTxType, shares, price, date: formTxDate, notes: formTxNotes.trim() || null }),
-      })
-      if (!ok) { toast.error((data as { error?: string }).error || 'فشل إضافة المعاملة'); return }
-      await fetchHoldings(); setTxDialogOpen(false); setSelectedHolding(null); resetTxForm()
-      toast.success(`${formTxType === 'BUY' ? 'شراء' : 'بيع'} ${shares} سهم من ${selectedHolding.symbol}`)
-    } catch { toast.error('فشل إضافة المعاملة') }
-  }, [selectedHolding, formTxType, formTxShares, formTxPrice, formTxDate, formTxNotes, fetchHoldings])
 
-  // ── Fetch single holding transactions ───────────────────────
-  const fetchTransactions = useCallback(async (holdingId: string) => {
-    try {
-      const { ok, data } = await apiFetch<DbHolding>(`/api/holdings/${holdingId}`)
-      if (!ok) return
-      setHoldings((prev) => prev.map((h) => { if (h.id !== holdingId) return h; return toStoredHolding({ ...data, transactions: (data as DbHolding).transactions ?? h.transactions } as unknown as DbHolding) }))
-    } catch { /* ignore */ }
-  }, [])
+    const total = shares * price
+    const now = new Date().toISOString()
+    const txDate = new Date(formTxDate).toISOString()
+    const tx: Transaction = {
+      id: crypto.randomUUID(), holdingId: selectedHolding.id, type: formTxType,
+      shares, price, total, date: txDate, notes: formTxNotes.trim() || null, createdAt: now,
+    }
+
+    setHoldings((prev) => prev.map((h) => {
+      if (h.id !== selectedHolding.id) return h
+      const newTxs = [tx, ...h.transactions]
+      let newShares = h.shares
+      let newAvgCost = h.avgCost
+      if (formTxType === 'BUY') {
+        newShares = h.shares + shares
+        newAvgCost = ((h.shares * h.avgCost) + total) / newShares
+      } else {
+        if (shares > h.shares) { toast.error(`عدد الأسهم غير كافٍ. تملك ${h.shares}`); return h }
+        newShares = h.shares - shares
+      }
+      return {
+        ...h, shares: newShares, avgCost: newAvgCost, transactions: newTxs,
+        updatedAt: now, marketValue: newShares * newAvgCost, costBasis: newShares * newAvgCost,
+      }
+    }))
+    setTxDialogOpen(false); setSelectedHolding(null); resetTxForm()
+    toast.success(`${formTxType === 'BUY' ? 'شراء' : 'بيع'} ${shares} سهم من ${selectedHolding.symbol}`)
+  }, [selectedHolding, formTxType, formTxShares, formTxPrice, formTxDate, formTxNotes, setHoldings])
+
+  // ── Fetch single holding transactions (no-op, local) ───────
+  const fetchTransactions = useCallback((_holdingId: string) => { /* local */ }, [])
 
   // ── Dialog openers ─────────────────────────────────────────
   const openEditDialog = useCallback((holding: Holding) => {
@@ -352,11 +298,19 @@ export function useHoldings(): UseHoldingsReturn {
     return { totalInvestment, totalMarketValue, totalPnL, totalPnLPercent, todaysChange, todaysChangePercent, numberOfHoldings: holdings.length, bestPerformer: best, worstPerformer: worst }
   }, [holdings])
 
+  // ── No-op stubs for removed auth fields ────────────────────
+  const noop = useCallback(() => {}, [])
+  const noopStr = useCallback((_v: string) => {}, [])
+  const noopBool = useCallback((_v: boolean) => {}, [])
+
   return {
-    profile, authenticated, hydrated, isRegisterMode, setIsRegisterMode,
-    loginEmail, setLoginEmail, loginPassword, setLoginPassword,
-    confirmPassword, setConfirmPassword, loginError, setLoginError, authLoading,
-    handleLogin, handleRegister, handleLogout,
+    profile: { id: 'local', email: '' }, authenticated: true, hydrated,
+    isRegisterMode: false, setIsRegisterMode: noopBool,
+    loginEmail: '', setLoginEmail: noopStr,
+    loginPassword: '', setLoginPassword: noopStr,
+    confirmPassword: '', setConfirmPassword: noopStr,
+    loginError: '', setLoginError: noopStr, authLoading: false,
+    handleLogin: noop, handleRegister: noop, handleLogout: noop,
     holdings, setHoldings, loading, fetchHoldings,
     sortField, sortDir, sortedHoldings, toggleSort,
     addDialogOpen, setAddDialogOpen, editDialogOpen, setEditDialogOpen,

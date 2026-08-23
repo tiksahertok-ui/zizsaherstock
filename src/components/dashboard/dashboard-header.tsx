@@ -7,12 +7,9 @@ import {
   Plus,
   Sun,
   Moon,
-  LogOut,
-  Mail,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 
 type Profile = {
   id: string;
@@ -28,10 +25,8 @@ interface DashboardHeaderProps {
 }
 
 export function DashboardHeader({
-  profile,
   onRefresh,
   onAddPosition,
-  onLogout,
   refreshing,
 }: DashboardHeaderProps) {
   const { resolvedTheme, setTheme } = useTheme();
@@ -49,16 +44,6 @@ export function DashboardHeader({
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
-          {profile && (
-            <>
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/60 border text-sm">
-                <Mail className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span className="font-medium truncate max-w-[180px]">{profile.email}</span>
-              </div>
-              <Separator orientation="vertical" className="hidden sm:block h-6" />
-            </>
-          )}
-
           <Button
             variant="ghost"
             size="icon"
@@ -81,28 +66,14 @@ export function DashboardHeader({
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           </Button>
 
-          {profile && (
-            <Button
-              size="sm"
-              onClick={onAddPosition}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-            >
-              <Plus className="h-4 w-4 mr-1.5" />
-              <span className="hidden sm:inline">Add Position</span>
-            </Button>
-          )}
-
-          {profile && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onLogout}
-              className="rounded-full text-muted-foreground hover:text-destructive"
-              aria-label="Log out"
-            >
-              <LogOut className="h-4 w-4" />
-            </Button>
-          )}
+          <Button
+            size="sm"
+            onClick={onAddPosition}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+          >
+            <Plus className="h-4 w-4 mr-1.5" />
+            <span className="hidden sm:inline">Add Position</span>
+          </Button>
         </div>
       </div>
     </header>
