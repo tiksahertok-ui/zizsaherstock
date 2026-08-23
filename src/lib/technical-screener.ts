@@ -512,7 +512,7 @@ function classifySignal(rawScore: number, params: ScreenerParameters): SignalTyp
 // ── Stop-Loss & Take-Profit ──────────────────────────────────
 
 function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe): { price: number; pct: number } {
-  const { close, atr, sma20, sma50, sma100, bbLower, bbUpper } = t;
+  const { close, atr, sma20, sma50, sma100, sma200, bbLower, bbUpper } = t;
   const atrMul = TF_ADJUST[tf].atrMultiplier;
   const safeAtr = atr > 0 ? atr : close * 0.02;
 
