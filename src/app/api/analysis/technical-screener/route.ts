@@ -26,9 +26,13 @@ import {
  * Cache: 120s stale-while-revalidate
  */
 
-// Simple in-memory cache for the full screener result
-let cachedResult: { data: string; ts: number; params: string } | null = null;
-const CACHE_TTL = 120_000;
+// Simple in-memory cache keyed by params
+let cachedResult: { data: string; ts: number; key: string } | null = null;
+const CACHE_TTL = 120_000; // 2 minutes
+
+function cacheKey(params: Record<string, string>): string {
+  return Object.entries(params).filter(([k,v]) => v).sort().map(([k,v]) => `${k}=${v}`).join('&');
+}
 
 export async function GET(request: NextRequest) {
   const startTime = Date.now();
@@ -49,6 +53,14 @@ export async function GET(request: NextRequest) {
     const backtestPeriod = (searchParams.get('backtestPeriod') as '1W' | '1M' | '3M' | '6M') || '1M';
     const format = searchParams.get('format') || 'json';
     const timeframe = (searchParams.get('timeframe') as Timeframe) || 'daily';
+
+    // Check cache
+    const ck = cacheKey({ sector: sector || '', signal: signal || '', sort, limit: String(limit), timeframe, minConfidence: String(minConfidence || '') });
+    if (cachedResult && Date.now() - cachedResult.ts < CACHE_TTL && cachedResult.key === ck) {
+      return new NextResponse(cachedResult.data, {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=120, stale-while-revalidate=30', 'X-Cache': 'HIT' },
+      });
+    }
 
     // Validate timeframe
     if (!['daily', 'weekly', 'monthly'].includes(timeframe)) {
@@ -81,6 +93,11 @@ export async function GET(request: NextRequest) {
     const techData = await fetchTechnicalIndicators(allSymbols);
     log.log('info', 'API', `Received data for ${Object.keys(techData).length}/${allSymbols.length} stocks`);
 
+    const dataRatio = Object.keys(techData).length / allSymbols.length;
+    if (dataRatio < 0.77) { // less than 77%
+      log.log('warn', 'API', `DEGRADED: only ${(dataRatio * 100).toFixed(0)}% of stocks returned`);
+    }
+
     if (Object.keys(techData).length < 10) {
       log.log('error', 'API', `Insufficient data: only ${Object.keys(techData).length} stocks returned`);
       return NextResponse.json(
@@ -89,11 +106,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // ── Step 2: Fetch live quotes for volume ──
-    const liveData = await fetchQuotesLive(allSymbols);
+    // ── Step 2: Extract 30-day average volumes from technical data ──
     const avgVolumes: Record<string, number> = {};
-    for (const [sym, q] of Object.entries(liveData)) {
-      avgVolumes[sym] = q.volume;
+    for (const [sym, t] of Object.entries(techData)) {
+      avgVolumes[sym] = t.avgVolume30d > 0 ? t.avgVolume30d : t.volume;
     }
 
     // ── Step 3: Run engine ──
@@ -127,7 +143,8 @@ export async function GET(request: NextRequest) {
       log.log('info', 'Backtest', `Running ${backtestPeriod} backtest on ${result.stocks.length} stocks`);
       const perfData = await fetchPerformance(result.stocks.map(s => s.symbol));
 
-      // FIX: Use LIVE prices as current prices (not entry/scan prices)
+      // Fetch live quotes only for backtest (for current prices)
+      const liveData = await fetchQuotesLive(result.stocks.map(s => s.symbol));
       const currentPrices: Record<string, number> = {};
       for (const s of result.stocks) {
         currentPrices[s.symbol] = liveData[s.symbol]?.close || s.entryPrice;
@@ -163,16 +180,18 @@ export async function GET(request: NextRequest) {
     }
 
     // JSON response
-    return NextResponse.json({
+    const responseData = JSON.stringify({
       stocks: limited,
       summary: { ...result.summary, filteredTotal: limited.length },
       backtest,
       parameters: result.parameters,
       generatedAt: result.generatedAt,
       logs: log.logs,
-      _meta: { elapsedMs: elapsed, dataPoints: Object.keys(techData).length },
-    }, {
-      headers: { 'Cache-Control': 'public, max-age=120, stale-while-revalidate=30' },
+      _meta: { elapsedMs: elapsed, dataPoints: Object.keys(techData).length, dataCompleteness: Math.round(dataRatio * 100), degraded: dataRatio < 0.77, failedSymbols: allSymbols.length - Object.keys(techData).length },
+    });
+    cachedResult = { data: responseData, ts: Date.now(), key: ck };
+    return new NextResponse(responseData, {
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=120, stale-while-revalidate=30', 'X-Cache': 'MISS' },
     });
   } catch (error) {
     const elapsed = Date.now() - startTime;

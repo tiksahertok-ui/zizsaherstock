@@ -69,7 +69,11 @@ const SIGNAL_STYLES: Record<SignalType, { bg: string; text: string; border: stri
   'Strong Sell': { bg: 'bg-red-600/15 dark:bg-red-500/15', text: 'text-red-700 dark:text-red-400', border: 'border-red-600/30', icon: TrendingDown, glow: '' },
 };
 
-const SECTORS = ['All', 'Financials', 'Real Estate', 'Materials', 'Communications', 'Energy', 'Consumer Staples', 'Healthcare', 'Industrials', 'Consumer Discretionary', 'Utilities', 'Technology'];
+const SECTORS = [
+  'All', 'Financials', 'Real Estate', 'Materials', 'Healthcare', 
+  'Industrials', 'Consumer Discretionary', 'Consumer Defensive', 
+  'Energy', 'Technology'
+];
 const TIMEFRAMES = [{ value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }, { value: 'monthly', label: 'Monthly' }];
 const INDICATOR_LIST = ['SMA20', 'SMA50', 'SMA200', 'EMA20', 'EMA50', 'EMA200'] as const;
 const DQ_GRADE_COLORS: Record<string, string> = { 'A+': 'text-emerald-600', A: 'text-emerald-500', 'B+': 'text-blue-500', B: 'text-blue-400', 'C+': 'text-amber-500', C: 'text-amber-400', D: 'text-orange-500', F: 'text-red-500' };
@@ -237,9 +241,9 @@ export default function ScreenerPage() {
                     { label: 'Avg Loss', value: backtest.avgLoss + '%', good: backtest.avgLoss > -5 },
                     { label: 'Expectancy', value: backtest.expectancy + '%', good: backtest.expectancy > 0 },
                     { label: 'Profit Factor', value: backtest.profitFactor + 'x', good: backtest.profitFactor > 1 },
-                    { label: 'Max DD', value: backtest.maxDrawdown + '%', good: backtest.maxDrawdown > -10 },
+                    { label: 'Worst Trade', value: backtest.maxDrawdown + '%', good: backtest.maxDrawdown > -10 },
                     { label: 'Sharpe', value: backtest.sharpeRatio.toFixed(2), good: backtest.sharpeRatio > 0.5 },
-                    { label: 'Trade Freq', value: backtest.tradeFrequency + '%', good: backtest.tradeFrequency > 20 },
+                    { label: 'Signal Rate', value: backtest.tradeFrequency + '%', good: backtest.tradeFrequency > 20 },
                     { label: 'Signals', value: backtest.activeSignals + '/' + backtest.totalSignals, good: true },
                   ].map(m => (
                     <div key={m.label}>
@@ -327,7 +331,7 @@ export default function ScreenerPage() {
                 <td className="text-right px-3 py-2.5"><span className="font-mono text-xs text-red-500">{s.stopLoss.toFixed(2)}</span><div className="text-[10px] text-muted-foreground">-{s.stopLossPct}%</div></td>
                 {s.takeProfits.map(tp => (<td key={tp.level} className={"text-right px-3 py-2.5 " + (tp.probability === 'High' ? 'text-emerald-600' : tp.probability === 'Medium' ? 'text-amber-500' : 'text-muted-foreground')}><span className="font-mono text-xs">{tp.price.toFixed(2)}</span><div className="text-[9px] text-muted-foreground">{tp.basis}</div></td>))}
                 {Array.from({ length: 3 - s.takeProfits.length }).map((_, j) => <td key={"e" + j} className="px-3 py-2.5 text-muted-foreground text-xs">-</td>)}
-                <td className="text-center px-3 py-2.5"><span className={"font-bold text-xs " + (s.riskReward >= 2 ? 'text-emerald-600' : s.riskReward >= 1 ? 'text-amber-500' : 'text-red-500')}>{s.riskReward.toFixed(1)}</span></td>
+                <td className="text-center px-3 py-2.5"><span className={"font-bold text-xs " + (s.riskReward === 0 ? 'text-muted-foreground' : s.riskReward >= 2 ? 'text-emerald-600' : s.riskReward >= 1 ? 'text-amber-500' : 'text-red-500')}>{s.riskReward === 0 ? 'N/A' : s.riskReward.toFixed(1)}</span></td>
                 <td className="text-center px-3 py-2.5"><div className="flex flex-col items-center gap-0.5"><div className="w-10 h-1.5 bg-muted rounded-full overflow-hidden"><div className={"h-full rounded-full " + (s.confidence >= 65 ? 'bg-emerald-500' : s.confidence >= 45 ? 'bg-amber-500' : 'bg-red-500')} style={{ width: s.confidence + '%' }} /></div><span className="text-[10px] font-medium">{s.confidence}</span></div></td>
                 <td className="text-center px-3 py-2.5 text-xs">{s.positionSize}%</td>
                 <td className="px-3 py-2.5"><div className="flex flex-wrap gap-1 max-w-[140px]">{s.tags.slice(0, 2).map(t => <Badge key={t} variant="secondary" className="text-[9px] px-1.5 py-0 h-4">{t}</Badge>)}{s.tags.length > 2 && <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4">+{s.tags.length - 2}</Badge>}</div>{s.riskFlags.length > 0 && <div className="flex items-center gap-0.5 mt-0.5 text-[9px] text-amber-500"><AlertTriangle className="w-2.5 h-2.5" /><span className="truncate max-w-[120px]">{s.riskFlags[0]}</span></div>}</td>
@@ -351,8 +355,8 @@ export default function ScreenerPage() {
                         <div className="flex justify-between"><span className="text-muted-foreground">Volume</span><span>{(s.indicators.volume / 1000000).toFixed(1)}M</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Data Quality</span><span className={dqColor}>{s.dataQuality.grade} ({s.dataQuality.score})</span></div>
                       </div></div>
-                      <div><h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5 flex items-center gap-1.5"><TrendingUp className="w-3 h-3" /> Moving Averages vs {s.close.toFixed(2)} EGP</h4><div className="space-y-1.5 text-xs">
-                        {INDICATOR_LIST.map(label => { const key = label.toLowerCase() as 'sma20' | 'sma50' | 'sma200' | 'ema20' | 'ema50' | 'ema200'; const val = s.indicators[key]; if (!val || val <= 0) return null; const above = s.close > val; const pct = ((s.close - val) / val * 100); return (<div key={label} className="flex justify-between font-mono"><span className="text-muted-foreground">{label}</span><span className={above ? 'text-emerald-500' : 'text-red-500'}>{val.toFixed(2)} <span className="ml-1.5">{above ? '\u25b2' : '\u25bc'}{above ? '+' : ''}{pct.toFixed(1)}%</span></span></div>); })}
+                      <div><h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5 flex items-center gap-1.5"><TrendingUp className="w-3 h-3" /> Moving Averages vs {s.entryPrice.toFixed(2)} EGP</h4><div className="space-y-1.5 text-xs">
+                        {INDICATOR_LIST.map(label => { const key = label.toLowerCase() as 'sma20' | 'sma50' | 'sma200' | 'ema20' | 'ema50' | 'ema200'; const val = s.indicators[key]; if (!val || val <= 0) return null; const above = s.entryPrice > val; const pct = ((s.entryPrice - val) / val * 100); return (<div key={label} className="flex justify-between font-mono"><span className="text-muted-foreground">{label}</span><span className={above ? 'text-emerald-500' : 'text-red-500'}>{val.toFixed(2)} <span className="ml-1.5">{above ? '\u25b2' : '\u25bc'}{above ? '+' : ''}{pct.toFixed(1)}%</span></span></div>); })}
                       </div><Separator className="my-3" /><h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5 flex items-center gap-1.5"><Shield className="w-3 h-3" /> Risk Management</h4><div className="space-y-1.5 text-xs font-mono">
                         <div className="flex justify-between"><span className="text-muted-foreground">Timeframe</span><span>{s.timeframe} ({s.horizon})</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Max Risk/Trade</span><span>2%</span></div>

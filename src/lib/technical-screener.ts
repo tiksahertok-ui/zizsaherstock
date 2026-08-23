@@ -165,9 +165,9 @@ export const DEFAULT_PARAMS: ScreenerParameters = {
 
 /** Timeframe-specific threshold adjustments */
 const TF_ADJUST: Record<Timeframe, { thresholdScale: number; atrMultiplier: number; description: string }> = {
-  daily:   { thresholdScale: 1.0, atrMultiplier: 1.0, description: 'Intraday to few days' },
-  weekly:  { thresholdScale: 0.85, atrMultiplier: 1.5, description: '1-4 weeks' },
-  monthly: { thresholdScale: 0.70, atrMultiplier: 2.0, description: '1-3 months' },
+  daily:   { thresholdScale: 1.0, atrMultiplier: 1.0, description: 'Daily signals (intraday to few days)' },
+  weekly:  { thresholdScale: 0.85, atrMultiplier: 1.5, description: 'Daily data, conservative thresholds (1-4 week horizon)' },
+  monthly: { thresholdScale: 0.70, atrMultiplier: 2.0, description: 'Daily data, wide thresholds (1-3 month horizon)' },
 };
 
 // ── Utility ───────────────────────────────────────────────────
@@ -375,6 +375,20 @@ function scoreMomentum(t: TechnicalIndicators): ScoreComponent {
     }
   }
 
+  // MACD histogram magnitude
+  const histogram = macd - macdSignal;
+  const close = t.close;
+  if (close > 0) {
+    const histPct = Math.abs(histogram) / close * 100;
+    if (histPct > 0.5) {
+      const histDir = histogram > 0 ? 1 : -1;
+      score += histDir * 5;
+      r.push({ tag: 'MACD Histogram Strong', weight: 5, direction: histDir as 1 | -1, description: `MACD histogram magnitude ${histPct.toFixed(2)}% — strong ${histogram > 0 ? 'bullish' : 'bearish'} momentum` });
+    } else if (histPct < 0.1 && Math.abs(histogram) > 0) {
+      r.push({ tag: 'MACD Histogram Flat', weight: 0, direction: 0, description: 'MACD histogram near zero — no momentum' });
+    }
+  }
+
   return { name: 'Momentum', score: clamp(score, -100, 100), weight: 0.25, rationale: r };
 }
 
@@ -495,6 +509,39 @@ function scoreTVConsensus(t: TechnicalIndicators): ScoreComponent {
   return { name: 'TV Consensus', score: clamp(score, -100, 100), weight: 0.10, rationale: r };
 }
 
+/** 6. Trend Strength — ADX (weight: 0.10, redistributed from Trend)
+ *  Rules:
+ *    ADX > 25 → +15 (trending market, trust signals)
+ *    ADX 20-25 → +8 (moderate trend)
+ *    ADX < 20 → 0 (ranging, signals less reliable)
+ *    Applied as bonus/penalty to existing composite (additive, not replacing)
+ */
+function scoreTrendStrength(t: TechnicalIndicators): ScoreComponent {
+  const r: SignalRationale[] = [];
+  let score = 0;
+  // ADX not yet in TradingView scanner response — return neutral
+  // When added: const adx = (t as any).adx || 0;
+  // For now, estimate trend strength from MA alignment
+  const { close, sma20, sma50, sma200 } = t;
+  const aligned = (sma20 > 0 && sma50 > 0 && sma200 > 0);
+  if (aligned) {
+    const trendSlope = safeDiv(sma20 - sma200, sma200, 0) * 100;
+    const absSlope = Math.abs(trendSlope);
+    if (absSlope > 10) {
+      const dir = trendSlope > 0 ? 1 : -1;
+      score += dir * 15;
+      r.push({ tag: 'Strong Trend', weight: 15, direction: dir as 1 | -1, description: `MA slope ${trendSlope.toFixed(1)}% — strong ${dir > 0 ? 'up' : 'down'} trend` });
+    } else if (absSlope > 3) {
+      const dir = trendSlope > 0 ? 1 : -1;
+      score += dir * 8;
+      r.push({ tag: 'Moderate Trend', weight: 8, direction: dir as 1 | -1, description: `MA slope ${trendSlope.toFixed(1)}% — moderate trend` });
+    } else {
+      r.push({ tag: 'Weak/Ranging', weight: 0, direction: 0, description: 'MAs flat — ranging market, signals less reliable' });
+    }
+  }
+  return { name: 'TrendStrength', score: clamp(score, -100, 100), weight: 0.10, rationale: r };
+}
+
 // ── Signal Classification ──────────────────────────────────────
 
 function classifySignal(rawScore: number, params: ScreenerParameters): SignalType {
@@ -524,8 +571,9 @@ function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe)
     const bbSl = bbLower > 0 ? bbLower : close * 0.97;
     // Tightest SL below price
     const sl = Math.max(atrSL, Math.min(s20, s50, bbSl));
-    const pct = safeDiv(close - sl, close, 0) * 100;
-    return { price: round2(sl), pct: round2(pct) };
+    const finalSL = Math.min(sl, close * 0.995);
+    const pct = safeDiv(close - finalSL, close, 0) * 100;
+    return { price: round2(finalSL), pct: round2(pct) };
   } else if (signal === 'Strong Sell' || signal === 'Sell') {
     // Short: SL above resistance
     const atrSL = close + (safeAtr * 2 * atrMul);
@@ -533,8 +581,9 @@ function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe)
     const s50 = sma50 > 0 ? sma50 : close * 1.04;
     const bbSl = bbUpper > 0 ? bbUpper : close * 1.03;
     const sl = Math.min(atrSL, Math.max(s20, s50, bbSl));
-    const pct = safeDiv(sl - close, close, 0) * 100;
-    return { price: round2(sl), pct: round2(pct) };
+    const finalSL = Math.max(sl, close * 1.005);
+    const pct = safeDiv(finalSL - close, close, 0) * 100;
+    return { price: round2(finalSL), pct: round2(pct) };
   }
 
   // FIX: Hold — direction-aware SL based on trend
@@ -551,7 +600,7 @@ function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe)
 }
 
 function calcTakeProfits(t: TechnicalIndicators, signal: SignalType, tf: Timeframe): TakeProfitTarget[] {
-  const { close, atr, sma200, bbUpper, bbLower, week52High, week52Low } = t;
+  const { close, atr, sma200, sma50, bbUpper, bbLower, week52High, week52Low } = t;
   const atrMul = TF_ADJUST[tf].atrMultiplier;
   const safeAtr = atr > 0 ? atr : close * 0.02;
   const isBull = signal === 'Strong Buy' || signal === 'Buy';
@@ -577,6 +626,13 @@ function calcTakeProfits(t: TechnicalIndicators, signal: SignalType, tf: Timefra
     tps.push({ level: 3, price: round2(tp3a), basis: week52Low > 0 ? '52-Week Low' : `${round2(4 * atrMul)}× ATR`, probability: 'Low' });
   }
 
+  // Hold signals: generate directional TPs based on trend bias
+  if (tps.length === 0) {
+    const trendUp = sma50 > 0 && close > sma50;
+    const dir = trendUp ? 1 : -1;
+    tps.push({ level: 1, price: round2(close + dir * safeAtr * 1.5 * atrMul), basis: `${round2(1.5 * atrMul)}× ATR (trend)`, probability: 'Medium' });
+  }
+
   return tps;
 }
 
@@ -596,7 +652,7 @@ function getRiskFlags(t: TechnicalIndicators, signal: SignalType, volume: number
   if (t.atr <= 0) flags.push('Missing ATR');
   if (t.rsi <= 0) flags.push('Missing RSI');
   if (dq.anomalies.length > 0) flags.push(`${dq.anomalies.length} data anomaly(ies)`);
-  if (dq.grade <= 'C') flags.push(`Low data quality (${dq.grade})`);
+  if (dq.score < 50) flags.push(`Low data quality (${dq.grade})`);
   if (signal !== 'Hold' && t.rsi > 0) {
     if ((signal === 'Buy' && t.rsi > 65) || (signal === 'Sell' && t.rsi < 35)) {
       flags.push('Signal-RSI Divergence');
@@ -646,15 +702,17 @@ export async function runTechnicalScreener(
     const trend = scoreTrend(t);
     const momentum = scoreMomentum(t);
     const volResult = scoreVolatility(t);
-    const volumeScore = scoreVolume(t, avgVolumes[stock.symbol] || t.volume);
+    const volumeScore = scoreVolume(t, t.avgVolume30d > 0 ? t.avgVolume30d : (avgVolumes[stock.symbol] || t.volume));
     const tvConsensus = scoreTVConsensus(t);
+    const trendStrength = scoreTrendStrength(t);
 
     const composite =
-      trend.score * trend.weight +
-      momentum.score * momentum.weight +
-      volResult.score.score * volResult.score.weight +
-      volumeScore.score * volumeScore.weight +
-      tvConsensus.score * tvConsensus.weight;
+      trend.score * 0.25 +
+      momentum.score * 0.22 +
+      volResult.score.score * 0.18 +
+      volumeScore.score * 0.15 +
+      trendStrength.score * 0.10 +
+      tvConsensus.score * 0.10;
 
     const signal = classifySignal(composite, p);
 
@@ -663,7 +721,7 @@ export async function runTechnicalScreener(
     const allRationales = [
       ...trend.rationale, ...momentum.rationale,
       ...volResult.score.rationale, ...volumeScore.rationale,
-      ...tvConsensus.rationale,
+      ...trendStrength.rationale, ...tvConsensus.rationale,
     ];
     const agreeingRationales = allRationales.filter(r =>
       (composite > 0 && r.direction > 0) || (composite < 0 && r.direction < 0)
@@ -678,8 +736,8 @@ export async function runTechnicalScreener(
     const sl = calcStopLoss(t, signal, p.timeframe);
     const tps = calcTakeProfits(t, signal, p.timeframe);
     const risk = Math.abs(t.close - sl.price);
-    const reward = tps.length > 0 ? Math.abs(tps[0].price - t.close) : risk;
-    const riskReward = risk > 0 ? round2(reward / risk) : 0;
+    const reward = tps.length > 0 ? Math.abs(tps[0].price - t.close) : 0;
+    const riskReward = risk > 0 && reward > 0 ? round2(reward / risk) : 0;
     const positionSize = calcPositionSize(sl.pct, p, confidence);
     const riskFlags = getRiskFlags(t, signal, t.volume, dq);
 
@@ -774,9 +832,9 @@ export interface BacktestResult {
   avgLoss: number;
   expectancy: number;        // avg $ per trade (in %)
   profitFactor: number;
-  maxDrawdown: number;
+  worstTrade: number;
   sharpeRatio: number;
-  tradeFrequency: number;   // trades per period
+  signalRatePct: number;   // % of screened stocks with active signals
   sampleTrades: Array<{
     symbol: string;
     signal: SignalType;
@@ -839,8 +897,8 @@ export function backtestSignals(
   // Expectancy = (WinRate × AvgWin) - ((1 - WinRate) × |AvgLoss|)
   const expectancy = (winRate / 100) * avgWin - ((1 - winRate / 100)) * Math.abs(avgLoss);
 
-  // Max drawdown (simplified: worst single trade)
-  const maxDrawdown = signals.length > 0 ? Math.min(...signals.map(s => s.returnPct)) : 0;
+  // Worst single trade (not a true max drawdown)
+  const worstTrade = signals.length > 0 ? Math.min(...signals.map(s => s.returnPct)) : 0;
 
   // Sharpe ratio with period adjustment
   const mean = avgReturn;
@@ -853,15 +911,15 @@ export function backtestSignals(
   const annualFactor = Math.sqrt(periodsPerYear[period] || 12);
   const sharpeRatio = stdDev > 0 ? (mean / stdDev) * annualFactor : 0;
 
-  // Trade frequency per period (signals / total stocks as proxy)
-  const tradeFrequency = screenerStocks.length > 0
+  // Signal rate: % of screened stocks with active (non-Hold) signals
+  const signalRatePct = screenerStocks.length > 0
     ? round2((signals.length / screenerStocks.length) * 100)
     : 0;
 
   return {
     parameters: DEFAULT_PARAMS,
     period,
-    timeframe: 'daily',
+    timeframe: 'daily', // TODO: should come from params when backtest supports multi-TF
     totalSignals: screenerStocks.length,
     activeSignals: signals.length,
     winRate: round2(winRate),
@@ -870,9 +928,9 @@ export function backtestSignals(
     avgLoss: round2(avgLoss),
     expectancy: round2(expectancy),
     profitFactor: round2(profitFactor),
-    maxDrawdown: round2(maxDrawdown),
+    worstTrade: round2(worstTrade),
     sharpeRatio: round2(sharpeRatio),
-    tradeFrequency,
+    signalRatePct,
     sampleTrades: signals.slice(0, 20), // top 20 sample trades
   };
 }

@@ -113,20 +113,13 @@ const TECH_COLUMNS = [
   "EMA20", "EMA50", "EMA100", "EMA200",
   // Volatility-based dynamic S/R
   "BB.upper", "BB.lower", "ATR",
+  // 30-day average volume (real data from TradingView)
+  "average_volume_30d_calc",
   // Oscillators
   "RSI", "Stoch.K", "Stoch.D",
   "MACD.macd", "MACD.signal",
   // TradingView aggregated technical rating
   "Recommend.All", "Recommend.MA", "Recommend.Other",
-  // Pivot Points — Classic, Fibonacci, Camarilla, Woodie
-  "Pivot.M.Classic.Middle", "Pivot.M.Classic.S1", "Pivot.M.Classic.S2", "Pivot.M.Classic.S3",
-  "Pivot.M.Classic.R1", "Pivot.M.Classic.R2", "Pivot.M.Classic.R3",
-  "Pivot.M.Fibonacci.Middle", "Pivot.M.Fibonacci.S1", "Pivot.M.Fibonacci.S2", "Pivot.M.Fibonacci.S3",
-  "Pivot.M.Fibonacci.R1", "Pivot.M.Fibonacci.R2", "Pivot.M.Fibonacci.R3",
-  "Pivot.M.Camarilla.Middle", "Pivot.M.Camarilla.S1", "Pivot.M.Camarilla.S2", "Pivot.M.Camarilla.S3",
-  "Pivot.M.Camarilla.R1", "Pivot.M.Camarilla.R2", "Pivot.M.Camarilla.R3",
-  "Pivot.M.Woodie.Middle", "Pivot.M.Woodie.S1", "Pivot.M.Woodie.S2", "Pivot.M.Woodie.S3",
-  "Pivot.M.Woodie.R1", "Pivot.M.Woodie.R2", "Pivot.M.Woodie.R3",
 ];
 
 // ── SHARED LIVE CACHE (5s TTL) ─────────────────────────────────
@@ -150,7 +143,7 @@ const BATCH_SIZE = 20;
 const FETCH_TIMEOUT = 8_000;
 
 /**
- * Internal: Fetch symbols from TradingView scanner in parallel batches.
+ * Internal: Fetch symbols from TradingView scanner in staggered batches.
  * Uses in-flight deduplication to prevent duplicate concurrent requests.
  */
 async function fetchFromTV(
@@ -176,65 +169,68 @@ async function fetchFromTV(
         batches.push(symbols.slice(i, i + BATCH_SIZE));
       }
 
-      // Fetch ALL batches in parallel (no delay between batches)
-      const responses = await Promise.allSettled(
-        batches.map(async (batch) => {
-          const tickers = batch.map(toTvTicker);
-          const resp = await fetch(SCANNER_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              symbols: { tickers },
-              columns,
-            }),
-            cache: "no-store",
-            signal: AbortSignal.timeout(FETCH_TIMEOUT),
-          });
+      // Fetch batches with 150ms stagger to avoid rate limiting
+      const fetchSingleBatch = async (batch: string[]): Promise<Record<string, QuoteData>> => {
+        const tickers = batch.map(toTvTicker);
+        const resp = await fetch(SCANNER_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbols: { tickers },
+            columns,
+          }),
+          cache: "no-store",
+          signal: AbortSignal.timeout(FETCH_TIMEOUT),
+        });
 
-          if (!resp.ok) return {};
-          const json = (await resp.json()) as {
-            data?: Array<{ s: string; d: Array<number | string | null> }>;
+        if (!resp.ok) return {};
+        const json = (await resp.json()) as {
+          data?: Array<{ s: string; d: Array<number | string | null> }>;
+        };
+        if (!json.data) return {};
+
+        // Build column-index map for dynamic field extraction
+        const colIdx: Record<string, number> = {};
+        columns.forEach((col, i) => { colIdx[col] = i; });
+
+        const batchResult: Record<string, QuoteData> = {};
+        for (const item of json.data) {
+          const sym = fromTvTicker(item.s || "");
+          const d = item.d || [];
+          const get = (col: string) => toNum(d[colIdx[col]]);
+          const getStr = (col: string, fallback: string) =>
+            d[colIdx[col]] != null ? String(d[colIdx[col]]) : fallback;
+          batchResult[sym] = {
+            symbol: sym,
+            close: get("close"),
+            open: get("open"),
+            high: get("high"),
+            low: get("low"),
+            volume: get("volume"),
+            changePercent: get("change"),
+            changeAbs: get("change_abs"),
+            name: getStr("name", sym),
+            description: getStr("description", ""),
+            marketCap: get("market_cap_basic"),
+            currency: getStr("currency", "EGP"),
+            prevClose: get("Prev Close"),
+            week52High: get("52_week_high"),
+            week52Low: get("52_week_low"),
           };
-          if (!json.data) return {};
+        }
+        return batchResult;
+      };
 
-          // Build column-index map for dynamic field extraction
-          const colIdx: Record<string, number> = {};
-          columns.forEach((col, i) => { colIdx[col] = i; });
-
-          const batchResult: Record<string, QuoteData> = {};
-          for (const item of json.data) {
-            const sym = fromTvTicker(item.s || "");
-            const d = item.d || [];
-            const get = (col: string) => toNum(d[colIdx[col]]);
-            const getStr = (col: string, fallback: string) =>
-              d[colIdx[col]] != null ? String(d[colIdx[col]]) : fallback;
-            batchResult[sym] = {
-              symbol: sym,
-              close: get("close"),
-              open: get("open"),
-              high: get("high"),
-              low: get("low"),
-              volume: get("volume"),
-              changePercent: get("change"),
-              changeAbs: get("change_abs"),
-              name: getStr("name", sym),
-              description: getStr("description", ""),
-              marketCap: get("market_cap_basic"),
-              currency: getStr("currency", "EGP"),
-              prevClose: get("Prev Close"),
-              week52High: get("52_week_high"),
-              week52Low: get("52_week_low"),
-            };
-          }
-          return batchResult;
-        })
-      );
+      const batchResults: Record<string, QuoteData>[] = [];
+      for (let i = 0; i < batches.length; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 150));
+        const batchResult = await fetchSingleBatch(batches[i]);
+        batchResults.push(batchResult);
+      }
 
       // Merge results from all successful batches
-      for (const res of responses) {
-        if (res.status === "fulfilled") {
-          Object.assign(result, res.value);
-        }
+      for (const res of batchResults) {
+        Object.assign(result, res);
       }
 
       return result;
@@ -368,52 +364,61 @@ export async function fetchPerformance(
     batches.push(sorted.slice(i, i + BATCH_SIZE));
   }
 
-  const responses = await Promise.allSettled(
-    batches.map(async (batch) => {
-      const tickers = batch.map(toTvTicker);
-      const resp = await fetch(SCANNER_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbols: { tickers },
-          columns: PERF_COLUMNS,
-        }),
-        cache: "no-store",
-        signal: AbortSignal.timeout(FETCH_TIMEOUT),
-      });
+  // Fetch batches with 150ms stagger to avoid rate limiting
+  const fetchSingleBatch = async (batch: string[]): Promise<Record<string, PerformanceData>> => {
+    const tickers = batch.map(toTvTicker);
+    const resp = await fetch(SCANNER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbols: { tickers },
+        columns: PERF_COLUMNS,
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT),
+    });
 
-      if (!resp.ok) return {};
-      const json = (await resp.json()) as {
-        data?: Array<{ s: string; d: Array<number | string | null> }>;
+    if (!resp.ok) return {};
+    const json = (await resp.json()) as {
+      data?: Array<{ s: string; d: Array<number | string | null> }>;
+    };
+    if (!json.data) return {};
+
+    // Build column-index map for dynamic field extraction
+    const colIdx: Record<string, number> = {};
+    PERF_COLUMNS.forEach((col, i) => { colIdx[col] = i; });
+
+    const batchResult: Record<string, PerformanceData> = {};
+    for (const item of json.data) {
+      const sym = fromTvTicker(item.s || "");
+      const d = item.d || [];
+      const get = (col: string) => toNum(d[colIdx[col]]);
+      batchResult[sym] = {
+        symbol: sym,
+        name: sym === "XAUUSD" ? "Gold (USD)" : sym,
+        currentPrice: get("close"),
+        returns: {
+          "1D": get("change"),
+          "1W": get("Perf.W"),
+          "1M": get("Perf.1M"),
+          "3M": get("Perf.3M"),
+          "6M": get("Perf.6M"),
+          YTD: get("Perf.YTD"),
+        },
       };
-      if (!json.data) return {};
-
-      const batchResult: Record<string, PerformanceData> = {};
-      for (const item of json.data) {
-        const sym = fromTvTicker(item.s || "");
-        const d = item.d || [];
-        batchResult[sym] = {
-          symbol: sym,
-          name: sym === "XAUUSD" ? "Gold (USD)" : sym,
-          currentPrice: toNum(d[6]),
-          returns: {
-            "1D": toNum(d[0]),
-            "1W": toNum(d[1]),
-            "1M": toNum(d[2]),
-            "3M": toNum(d[3]),
-            "6M": toNum(d[4]),
-            YTD: toNum(d[5]),
-          },
-        };
-      }
-      return batchResult;
-    })
-  );
-
-  for (const res of responses) {
-    if (res.status === "fulfilled") {
-      Object.assign(result, res.value);
     }
+    return batchResult;
+  };
+
+  const batchResults: Record<string, PerformanceData>[] = [];
+  for (let i = 0; i < batches.length; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 150));
+    const batchResult = await fetchSingleBatch(batches[i]);
+    batchResults.push(batchResult);
+  }
+
+  for (const res of batchResults) {
+    Object.assign(result, res);
   }
 
   perfCache.set(key, { data: result, ts: now });
@@ -421,11 +426,6 @@ export async function fetchPerformance(
 }
 
 // ── Technical Indicators Data (60s cache) ─────────────────────
-
-interface PivotSet {
-  pp: number; s1: number; s2: number; s3: number;
-  r1: number; r2: number; r3: number;
-}
 
 export interface TechnicalIndicators {
   symbol: string;
@@ -459,11 +459,8 @@ export interface TechnicalIndicators {
   recommendAll: number;
   recommendMA: number;
   recommendOther: number;
-  // Pivot Points — TradingView built-in calculations
-  pivotsClassic: PivotSet;
-  pivotsFibonacci: PivotSet;
-  pivotsCamarilla: PivotSet;
-  pivotsWoodie: PivotSet;
+  // 30-day average volume
+  avgVolume30d: number;
 }
 
 const techCache = new Map<string, { data: Record<string, TechnicalIndicators>; ts: number }>();
@@ -495,75 +492,80 @@ export async function fetchTechnicalIndicators(
     batches.push(sorted.slice(i, i + BATCH_SIZE));
   }
 
-  const responses = await Promise.allSettled(
-    batches.map(async (batch) => {
-      const tickers = batch.map(toTvTicker);
-      const resp = await fetch(SCANNER_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbols: { tickers },
-          columns: TECH_COLUMNS,
-        }),
-        cache: "no-store",
-        signal: AbortSignal.timeout(FETCH_TIMEOUT),
-      });
+  // Build column-index map from TECH_COLUMNS for dynamic field extraction
+  const colIdx: Record<string, number> = {};
+  TECH_COLUMNS.forEach((col, i) => { colIdx[col] = i; });
 
-      if (!resp.ok) return {};
-      const json = (await resp.json()) as {
-        data?: Array<{ s: string; d: Array<number | string | null> }>
+  // Fetch batches with 150ms stagger to avoid rate limiting
+  const fetchSingleBatch = async (batch: string[]): Promise<Record<string, TechnicalIndicators>> => {
+    const tickers = batch.map(toTvTicker);
+    const resp = await fetch(SCANNER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbols: { tickers },
+        columns: TECH_COLUMNS,
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT),
+    });
+
+    if (!resp.ok) return {};
+    const json = (await resp.json()) as {
+      data?: Array<{ s: string; d: Array<number | string | null> }>
+    };
+    if (!json.data) return {};
+
+    const batchResult: Record<string, TechnicalIndicators> = {};
+
+    for (const item of json.data) {
+      const sym = fromTvTicker(item.s || "");
+      const d = item.d || [];
+      const get = (col: string) => toNum(d[colIdx[col]]);
+
+      batchResult[sym] = {
+        symbol: sym,
+        close: get("close"),
+        high: get("high"),
+        low: get("low"),
+        open: get("open"),
+        volume: get("volume"),
+        week52High: get("price_52_week_high"),
+        week52Low: get("price_52_week_low"),
+        sma20: get("SMA20"),
+        sma50: get("SMA50"),
+        sma100: get("SMA100"),
+        sma200: get("SMA200"),
+        ema20: get("EMA20"),
+        ema50: get("EMA50"),
+        ema100: get("EMA100"),
+        ema200: get("EMA200"),
+        bbUpper: get("BB.upper"),
+        bbLower: get("BB.lower"),
+        atr: get("ATR"),
+        avgVolume30d: get("average_volume_30d_calc"),
+        rsi: get("RSI"),
+        stochK: get("Stoch.K"),
+        stochD: get("Stoch.D"),
+        macd: get("MACD.macd"),
+        macdSignal: get("MACD.signal"),
+        recommendAll: get("Recommend.All"),
+        recommendMA: get("Recommend.MA"),
+        recommendOther: get("Recommend.Other"),
       };
-      if (!json.data) return {};
-
-      const batchResult: Record<string, TechnicalIndicators> = {};
-      for (const item of json.data) {
-        const sym = fromTvTicker(item.s || "");
-        const d = item.d || [];
-        const g = (i: number) => toNum(d[i]);
-
-        batchResult[sym] = {
-          symbol: sym,
-          close: g(0),
-          high: g(1),
-          low: g(2),
-          open: g(3),
-          volume: g(4),
-          week52High: g(5),
-          week52Low: g(6),
-          sma20: g(7),
-          sma50: g(8),
-          sma100: g(9),
-          sma200: g(10),
-          ema20: g(11),
-          ema50: g(12),
-          ema100: g(13),
-          ema200: g(14),
-          bbUpper: g(15),
-          bbLower: g(16),
-          atr: g(17),
-          rsi: g(18),
-          stochK: g(19),
-          stochD: g(20),
-          macd: g(21),
-          macdSignal: g(22),
-          recommendAll: g(23),
-          recommendMA: g(24),
-          recommendOther: g(25),
-          // Pivot Points from TradingView (indices 26-49)
-          pivotsClassic: { pp: g(26), s1: g(27), s2: g(28), s3: g(29), r1: g(30), r2: g(31), r3: g(32) },
-          pivotsFibonacci: { pp: g(33), s1: g(34), s2: g(35), s3: g(36), r1: g(37), r2: g(38), r3: g(39) },
-          pivotsCamarilla: { pp: g(40), s1: g(41), s2: g(42), s3: g(43), r1: g(44), r2: g(45), r3: g(46) },
-          pivotsWoodie: { pp: g(47), s1: g(48), s2: g(49), s3: g(50), r1: g(51), r2: g(52), r3: g(53) },
-        };
-      }
-      return batchResult;
-    })
-  );
-
-  for (const res of responses) {
-    if (res.status === "fulfilled") {
-      Object.assign(result, res.value);
     }
+    return batchResult;
+  };
+
+  const batchResults: Record<string, TechnicalIndicators>[] = [];
+  for (let i = 0; i < batches.length; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 150));
+    const batchResult = await fetchSingleBatch(batches[i]);
+    batchResults.push(batchResult);
+  }
+
+  for (const res of batchResults) {
+    Object.assign(result, res);
   }
 
   techCache.set(key, { data: result, ts: now });

@@ -22,7 +22,6 @@ export const EGX_STOCKS: Array<{
   { symbol: "AIFI", name: "Atlas for Investment & Food Industries SAE", sector: "Consumer Defensive" },
   { symbol: "AFMC", name: "Alexandria Flour Mills", sector: "Consumer Defensive" },
   { symbol: "AIDC", name: "Arabia for Investment and Development S.A.E.", sector: "Real Estate" },
-  { symbol: "AIHC", name: "Arabia Investments Holding", sector: "Industrials" },
   { symbol: "AIH", name: "Arabia Investments Holding", sector: "Industrials" },
   { symbol: "AJWA", name: "AJWA For Food Industries Co. Egypt", sector: "Consumer Defensive" },
   { symbol: "ALCN", name: "Alexandria Container & Cargo Handling Company", sector: "Industrials" },
@@ -270,7 +269,7 @@ export const EGX_STOCKS: Array<{
   { symbol: "ZMID", name: "Zahraa El Maadi Investment and Development Company SAE", sector: "Real Estate" },
 ];
 
-export const EGX_STOCK_COUNT = EGX_STOCKS.length;
+export const EGX_STOCK_COUNT = EGX_STOCKS.length; // 259 unique stocks
 
 // ── Helper: Find stock by symbol or name ────────────────────────
 export function findStock(symbolOrName: string): (typeof EGX_STOCKS)[number] | undefined {
