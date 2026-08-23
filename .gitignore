@@ -1,54 +1,32 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+```
+# Python compiled files
+*.pyc
+__pycache__/
 
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# Data cache and output files
+egx_screener/data/cache/
+egx_screener/output/*.json
+egx_screener/output/*.csv
 
-# testing
-/coverage
+# Dependencies and virtual environments
+.venv/
+venv/
+.env
+.env.local
+*.env.*
 
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
+# Logs and temporary files
 *.log
-dev.log
-dev.out.log
-test
-prompt
+*.tmp
 
-server.log
-# Skills directory
-/skills/
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build and distribution directories
+build/
+dist/
+target/
+```
