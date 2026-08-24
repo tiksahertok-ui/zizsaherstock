@@ -149,15 +149,15 @@ export interface ScreenerParameters {
 // ── Default Parameters ────────────────────────────────────────
 
 export const DEFAULT_PARAMS: ScreenerParameters = {
-  buyThreshold: 35,
-  strongBuyThreshold: 65,
-  sellThreshold: -35,
-  strongSellThreshold: -65,
+  buyThreshold: 15,
+  strongBuyThreshold: 28,
+  sellThreshold: -15,
+  strongSellThreshold: -28,
   maxRiskPerTrade: 2,
   maxPortfolioExposure: 80,
-  minLiquidity: 50_000,     // lowered from 100k — many EGX stocks are illiquid
-  volumeSpikeThreshold: 1.5,
-  minPrice: 0.5,           // EGX has penny stocks
+  minLiquidity: 10_000,     // many EGX stocks are illiquid
+  volumeSpikeThreshold: 1.3,
+  minPrice: 0.1,           // EGX has penny stocks
   maxPrice: 0,
   minConfidence: 0,        // show all by default, let user filter
   timeframe: 'daily',
@@ -166,8 +166,8 @@ export const DEFAULT_PARAMS: ScreenerParameters = {
 /** Timeframe-specific threshold adjustments */
 const TF_ADJUST: Record<Timeframe, { thresholdScale: number; atrMultiplier: number; description: string }> = {
   daily:   { thresholdScale: 1.0, atrMultiplier: 1.0, description: 'Daily signals (intraday to few days)' },
-  weekly:  { thresholdScale: 0.85, atrMultiplier: 1.5, description: 'Daily data, conservative thresholds (1-4 week horizon)' },
-  monthly: { thresholdScale: 0.70, atrMultiplier: 2.0, description: 'Daily data, wide thresholds (1-3 month horizon)' },
+  weekly:  { thresholdScale: 0.80, atrMultiplier: 1.5, description: 'Weekly signals (1-4 week horizon)' },
+  monthly: { thresholdScale: 0.65, atrMultiplier: 2.0, description: 'Monthly signals (1-3 month horizon)' },
 };
 
 // ── Utility ───────────────────────────────────────────────────
@@ -443,52 +443,60 @@ function scoreVolatility(t: TechnicalIndicators): { score: ScoreComponent; bbWid
   return { score: { name: 'Volatility', score: 0, weight: 0.20, rationale: r }, bbWidth, bbPos: 0 };
 }
 
-/** 4. Volume Confirmation (weight: 0.15)
+/** 4. Volume Confirmation (weight: 0.10)
  *  Rules:
  *    Volume > 2× avg with price up → +20 (strong buying)
  *    Volume > 2× avg with price down → -20 (distribution)
- *    Volume > 1.5× avg with price up → +12 (accumulation)
- *    Volume > 1.5× avg with price down → -10 (above-avg selling)
+ *    Volume > 1.3× avg with price up → +12 (accumulation)
+ *    Volume > 1.3× avg with price down → -10 (above-avg selling)
  *    Volume < 0.5× avg → neutral flag (low conviction)
- *
- *  NOTE: avgVolume from TradingView is current-day volume (no historical avg).
- *  When real avg volume is available, this becomes much more accurate.
+ *    Normal volume → small score from price-direction proxy (+3/-3)
  */
 function scoreVolume(t: TechnicalIndicators, avgVolume: number): ScoreComponent {
   const r: SignalRationale[] = [];
   let score = 0;
   const { volume, close, sma20 } = t;
 
-  // FIX: Properly handle missing volume data
-  if (volume <= 0 || avgVolume <= 0) {
-    const rationale: SignalRationale = { tag: 'No Volume Data', weight: 0, direction: 0, description: 'Volume data unavailable — cannot confirm' };
-    return { name: 'Volume', score: 0, weight: 0.15, rationale: [rationale] };
+  // If avgVolume available, use ratio-based scoring
+  if (volume > 0 && avgVolume > 0) {
+    const volRatio = safeDiv(volume, avgVolume, 1);
+    const priceChange = sma20 > 0 ? safeDiv(close - sma20, sma20, 0) * 100 : 0;
+
+    if (volRatio > 2) {
+      if (priceChange > 0) {
+        score += 20;
+        r.push({ tag: 'High Volume Rally', weight: 20, direction: 1, description: `Volume ${volRatio.toFixed(1)}× average with price up — strong buying` });
+      } else {
+        score -= 20;
+        r.push({ tag: 'High Volume Sell-off', weight: 20, direction: -1, description: `Volume ${volRatio.toFixed(1)}× average with price down — distribution` });
+      }
+    } else if (volRatio > 1.3) {
+      if (priceChange > 0) {
+        score += 12;
+        r.push({ tag: 'Above-Avg Volume Bull', weight: 12, direction: 1, description: `Volume ${volRatio.toFixed(1)}× average — accumulation` });
+      } else {
+        score -= 10;
+        r.push({ tag: 'Above-Avg Volume Bear', weight: 10, direction: -1, description: 'Above-average volume on decline' });
+      }
+    } else if (volRatio < 0.5) {
+      r.push({ tag: 'Low Volume', weight: 0, direction: 0, description: `Volume only ${volRatio.toFixed(1)}× average — low conviction` });
+    }
+  } else {
+    // Fallback: use price-direction proxy when avg volume is unavailable
+    // This is the common case for EGX data from TradingView
+    const priceChange = sma20 > 0 ? safeDiv(close - sma20, sma20, 0) * 100 : 0;
+    if (priceChange > 1) {
+      score += 5;
+      r.push({ tag: 'Price Above SMA20', weight: 5, direction: 1, description: `Price ${priceChange.toFixed(1)}% above SMA20 — mild accumulation signal` });
+    } else if (priceChange < -1) {
+      score -= 5;
+      r.push({ tag: 'Price Below SMA20', weight: 5, direction: -1, description: `Price ${Math.abs(priceChange).toFixed(1)}% below SMA20 — mild distribution` });
+    } else {
+      r.push({ tag: 'Normal Volume', weight: 0, direction: 0, description: 'Volume confirms current trend — no spike detected' });
+    }
   }
 
-  const volRatio = safeDiv(volume, avgVolume, 1);
-  const priceChange = sma20 > 0 ? safeDiv(close - sma20, sma20, 0) * 100 : 0;
-
-  if (volRatio > 2) {
-    if (priceChange > 0) {
-      score += 20;
-      r.push({ tag: 'High Volume Rally', weight: 20, direction: 1, description: `Volume ${volRatio.toFixed(1)}× average with price up — strong buying` });
-    } else {
-      score -= 20;
-      r.push({ tag: 'High Volume Sell-off', weight: 20, direction: -1, description: `Volume ${volRatio.toFixed(1)}× average with price down — distribution` });
-    }
-  } else if (volRatio > 1.5) {
-    if (priceChange > 0) {
-      score += 12;
-      r.push({ tag: 'Above-Avg Volume Bull', weight: 12, direction: 1, description: `Volume ${volRatio.toFixed(1)}× average — accumulation` });
-    } else {
-      score -= 10;
-      r.push({ tag: 'Above-Avg Volume Bear', weight: 10, direction: -1, description: 'Above-average volume on decline' });
-    }
-  } else if (volRatio < 0.5) {
-    r.push({ tag: 'Low Volume', weight: 0, direction: 0, description: `Volume only ${volRatio.toFixed(1)}× average — low conviction` });
-  }
-
-  return { name: 'Volume', score: clamp(score, -100, 100), weight: 0.15, rationale: r };
+  return { name: 'Volume', score: clamp(score, -100, 100), weight: 0.10, rationale: r };
 }
 
 /** 5. TradingView Consensus (weight: 0.10)
@@ -707,10 +715,10 @@ export async function runTechnicalScreener(
     const trendStrength = scoreTrendStrength(t);
 
     const composite =
-      trend.score * 0.25 +
-      momentum.score * 0.22 +
-      volResult.score.score * 0.18 +
-      volumeScore.score * 0.15 +
+      trend.score * 0.30 +
+      momentum.score * 0.25 +
+      volResult.score.score * 0.15 +
+      volumeScore.score * 0.10 +
       trendStrength.score * 0.10 +
       tvConsensus.score * 0.10;
 
