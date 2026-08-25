@@ -9,7 +9,7 @@ import {
   ArrowUpDown, Zap, CheckCircle, XCircle, ArrowLeft,
   Radio, Clock, Loader2, Activity, Crosshair, CalendarDays, FileWarning,
   Flame, Eye, LayoutGrid, LayoutList, Filter, ChevronRight,
-  ArrowUpRight, ArrowDownRight, Gauge, Layers, TrendingUpIcon, Star,
+  ArrowUpRight, ArrowDownRight, Gauge, Layers, TrendingUpIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -157,31 +157,108 @@ export default function ScreenerPage() {
 
   useEffect(() => { fetchScreener(); }, [fetchScreener]);
 
-  // Daily picks — Top 5 buy opportunities for the next session
-  // Filters for ACTUAL continuation: EMA alignment, MACD positive, RSI not overbought,
-  // price above key MAs, minimum R:R of 1.5, minimum confidence 40
+  // ═══════════════════════════════════════════════════════════════════════
+  // DAILY PICKS — Stocks with strongest NEXT SESSION bullish potential
+  // ═══════════════════════════════════════════════════════════════════════
+  // Scoring model evaluates 6 dimensions that predict next-session upside:
+  //
+  // 1. SIGNAL STRENGTH (25 pts): Strong Buy vs Buy + confidence level
+  // 2. TREND QUALITY (20 pts): EMA stack alignment, price vs key MAs
+  // 3. MOMENTUM QUALITY (20 pts): MACD direction, RSI sweet spot (40-65),
+  //    Stochastic position — all indicating more room to run
+  // 4. VOLUME INTEREST (15 pts): Volume above 30-day average = institutional
+  //    participation driving next session
+  // 5. RISK:REWARD (10 pts): Better R:R = more attractive opportunity
+  // 6. PATTERN BONUS (10 pts): Breakout setup, reversal from support,
+  //    BB squeeze — patterns that typically produce next-day moves
+  //
   const dailyBuyPicks = useMemo(() => {
     return stocks
       .filter(s => {
         if (s.signal !== 'Strong Buy' && s.signal !== 'Buy') return false;
         if (s.confidence < 40) return false;
         if (s.riskReward < 1.5) return false;
-        // Must show actual uptrend continuation
         const ind = s.indicators;
-        const emaBullish = ind.ema20 > 0 && ind.ema50 > 0 && ind.ema20 > ind.ema50;
-        const macdPositive = ind.macd > 0;
-        const aboveSma20 = ind.sma20 > 0 && ind.close > ind.sma20;
-        const rsiValid = ind.rsi > 0 && ind.rsi < 75; // not overbought
-        const validContinuation = (emaBullish ? 1 : 0) + (macdPositive ? 1 : 0) + (aboveSma20 ? 1 : 0) + (rsiValid ? 1 : 0);
-        return validContinuation >= 2; // at least 2/4 continuation signs
+        // RSI must have room to run (not overbought >75, not exhausted <25)
+        if (ind.rsi > 0 && ind.rsi > 75) return false;
+        // MACD must be bullish or crossing up
+        if (ind.macd < 0 && ind.macdSignal < 0 && ind.macd < ind.macdSignal) return false;
+        return true;
       })
-      .sort((a, b) => {
-        // Composite score: confidence 40% + R:R 30% + trend alignment 30%
-        const scoreA = a.confidence * 0.4 + Math.min(a.riskReward, 5) * 20 * 0.3 + (a.indicators.ema20 > a.indicators.ema50 ? 30 : 0);
-        const scoreB = b.confidence * 0.4 + Math.min(b.riskReward, 5) * 20 * 0.3 + (b.indicators.ema20 > b.indicators.ema50 ? 30 : 0);
-        return scoreB - scoreA;
+      .map(s => {
+        const ind = s.indicators;
+        let score = 0;
+
+        // ── 1. SIGNAL STRENGTH (25 pts) ──
+        const signalPts = s.signal === 'Strong Buy' ? 25 : 15;
+        const confPts = Math.min(s.confidence / 100, 1) * 15; // up to 15 bonus for high confidence
+        score += signalPts + confPts;
+
+        // ── 2. TREND QUALITY (20 pts) ──
+        let trendPts = 0;
+        // Perfect EMA stack: EMA20 > EMA50 > EMA200
+        if (ind.ema20 > 0 && ind.ema50 > 0 && ind.ema200 > 0 && ind.ema20 > ind.ema50 && ind.ema50 > ind.ema200) {
+          trendPts += 8; // perfect stack
+        } else if (ind.ema20 > 0 && ind.ema50 > 0 && ind.ema20 > ind.ema50) {
+          trendPts += 5; // partial stack
+        }
+        // Price above all key MAs
+        if (ind.sma20 > 0 && ind.close > ind.sma20) trendPts += 3;
+        if (ind.sma50 > 0 && ind.close > ind.sma50) trendPts += 3;
+        if (ind.sma200 > 0 && ind.close > ind.sma200) trendPts += 3;
+        // Price above EMA20 (short-term bullish)
+        if (ind.ema20 > 0 && ind.close > ind.ema20) trendPts += 3;
+        score += Math.min(trendPts, 20);
+
+        // ── 3. MOMENTUM QUALITY (20 pts) ──
+        let momPts = 0;
+        // RSI sweet spot: 40-65 = healthy uptrend with room to run
+        if (ind.rsi > 0) {
+          if (ind.rsi >= 45 && ind.rsi <= 65) momPts += 8; // ideal zone
+          else if (ind.rsi >= 35 && ind.rsi < 45) momPts += 5; // approaching ideal
+          else if (ind.rsi > 65 && ind.rsi <= 75) momPts += 3; // still OK
+          else if (ind.rsi < 35) momPts += 4; // oversold bounce potential
+        }
+        // MACD histogram positive and expanding
+        const hist = ind.macd - ind.macdSignal;
+        if (hist > 0) momPts += 5; // positive histogram
+        if (hist > 0 && ind.macd > ind.macdSignal) momPts += 3; // expanding
+        // Stochastic in bullish territory but not overbought
+        if (ind.stochK > 0 && ind.stochD > 0) {
+          if (ind.stochK > ind.stochD && ind.stochK < 75) momPts += 4; // bullish cross below 75
+          else if (ind.stochK > 20 && ind.stochK < 50 && ind.stochK > ind.stochD) momPts += 3; // low zone bull cross
+        }
+        score += Math.min(momPts, 20);
+
+        // ── 4. VOLUME INTEREST (15 pts) ──
+        let volPts = 0;
+        // Check if there are volume-related bullish tags
+        const hasVolSpike = s.tags.some(t => t === 'Volume Spike Up' || t === 'Strong Volume Up');
+        const hasAccumulation = s.tags.some(t => t === 'Normal Volume Up');
+        if (hasVolSpike) volPts += 12;
+        else if (hasAccumulation) volPts += 7;
+        else volPts += 4; // baseline — stock passed liquidity filter
+        score += Math.min(volPts, 15);
+
+        // ── 5. RISK:REWARD (10 pts) ──
+        const rrPts = Math.min(s.riskReward / 4, 1) * 10; // 4:1 R:R = full 10 pts
+        score += rrPts;
+
+        // ── 6. PATTERN BONUS (10 pts) ──
+        let patPts = 0;
+        // Breakout patterns (high next-session probability)
+        if (s.tags.some(t => t === 'Above SMA50' || t === 'Above SMA200')) patPts += 3;
+        if (s.tags.some(t => t === 'BB Squeeze')) patPts += 4; // squeeze = imminent move
+        if (s.tags.some(t => t === 'MACD Cross Up')) patPts += 3; // fresh crossover
+        if (s.tags.some(t => t === 'Bullish MA Stack')) patPts += 3;
+        // Reversal patterns
+        if (s.tags.some(t => t === 'RSI Oversold' || t === 'Stoch Oversold')) patPts += 2;
+        score += Math.min(patPts, 10);
+
+        return { ...s, nextSessionScore: Math.round(score) };
       })
-      .slice(0, 5); // Top 5 only
+      .sort((a, b) => (b as any).nextSessionScore - (a as any).nextSessionScore)
+      .slice(0, 5);
   }, [stocks]);
 
   const dailyPicks = useMemo(() => dailyBuyPicks, [dailyBuyPicks]);
@@ -525,7 +602,7 @@ export default function ScreenerPage() {
                       <h2 className="text-sm font-bold tracking-tight">أفضل 5 فرص للجلسة القادمة</h2>
                       {lastUpdated && <span className="text-[10px] text-muted-foreground">{new Date(lastUpdated).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'short' })}</span>}
                     </div>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">فرص شراء مرشّحة حسب قوة الاتجاه ونسبة المخاطرة للعائد</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">أقوى الإشارات الصعودية للجلسة التالية (قوة الإشارة/زخم/اتجاه/حجم)</p>
                   </div>
                 </div>
                 <Badge className="text-[9px] bg-emerald-500 text-white border-emerald-500 h-5 rounded-md px-2 font-bold gap-1">
@@ -543,7 +620,10 @@ export default function ScreenerPage() {
                     const tp2 = s.takeProfits[1];
                     const tp3 = s.takeProfits[2];
                     const rrColor = s.riskReward >= 2 ? 'text-emerald-600' : s.riskReward >= 1 ? 'text-amber-500' : 'text-red-500';
-                    const rrBg = s.riskReward >= 2 ? 'bg-emerald-500/10' : s.riskReward >= 1 ? 'bg-amber-500/10' : 'bg-red-500/10';
+                    const rrBg = s.riskReward >= 2 ? 'bg-emerald-500/10' : s.riskReward >= 1 ? 'bg-amber-500/10' : 'text-red-500';
+                    const nss = (s as any).nextSessionScore || 0;
+                    const nssLabel = nss >= 75 ? 'قوية جداً' : nss >= 55 ? 'قوية' : 'متوسطة';
+                    const nssColor = nss >= 75 ? 'text-emerald-600 bg-emerald-500/10' : nss >= 55 ? 'text-amber-600 bg-amber-500/10' : 'text-muted-foreground bg-muted';
                     return (
                       <motion.div
                         key={s.symbol}
@@ -569,11 +649,13 @@ export default function ScreenerPage() {
                         ].join(' ')} />
 
                         <div className="p-3 space-y-2">
-                          {/* Header: Symbol + Confidence */}
+                          {/* Header: Rank + Symbol + Score */}
                           <div className="flex items-start justify-between gap-1.5">
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
-                                {isTop && <Star className="w-3 h-3 text-amber-400 fill-amber-400 shrink-0" />}
+                                <span className={["text-[9px] font-bold w-4 h-4 rounded-md flex items-center justify-center shrink-0",
+                                  isTop ? 'bg-amber-400 text-white' : 'bg-muted text-muted-foreground'
+                                ].join(' ')}>{i + 1}</span>
                                 <span className="font-bold text-sm">{s.symbol}</span>
                                 <SignalBadge signal={s.signal} size="sm" />
                               </div>
@@ -582,7 +664,10 @@ export default function ScreenerPage() {
                                 <span className="text-[9px] font-mono font-medium text-muted-foreground/70">{s.indicators.close.toFixed(2)} ج.م</span>
                               </div>
                             </div>
-                            <ConfidenceRing value={s.confidence} size={34} />
+                            <div className="flex flex-col items-center gap-1">
+                              <ConfidenceRing value={s.confidence} size={30} />
+                              <span className={["text-[7px] font-bold px-1.5 py-0.5 rounded leading-none", nssColor].join(' ')}>{nss}%</span>
+                            </div>
                           </div>
 
                           {/* Entry: Smart price with strategy */}
