@@ -699,12 +699,6 @@ export default function ScreenerPage() {
                 </div>
               )}
 
-              {/* Empty state */
-              {dailyPicks.length === 0 && (
-                <div className="px-5 py-8 text-center">
-                  <p className="text-xs text-muted-foreground">لا توجد إشارات كافية في الوقت الحالي</p>
-                </div>
-              )}
             </div>
           </motion.section>
         )}
