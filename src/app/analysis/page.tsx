@@ -9,7 +9,7 @@ import {
   ArrowUpDown, Zap, CheckCircle, XCircle, ArrowLeft,
   Radio, Clock, Loader2, Activity, Crosshair, CalendarDays, FileWarning,
   Flame, Eye, LayoutGrid, LayoutList, Filter, ChevronRight,
-  ArrowUpRight, ArrowDownRight, ArrowDownLeft, Gauge, Layers, TrendingUpIcon, Star,
+  ArrowUpRight, ArrowDownRight, Gauge, Layers, TrendingUpIcon, Star,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -388,11 +388,10 @@ export default function ScreenerPage() {
               <div className="text-[9px] font-semibold text-blue-500/70 uppercase tracking-wider mb-1">سعر الدخول</div>
               <div className="text-sm font-bold font-mono text-blue-600 dark:text-blue-400">{entry.toFixed(2)}</div>
               <div className="text-[10px] text-muted-foreground/60 mt-1">— ج.م</div>
-              {s.entryDetail?.strategy && s.entryDetail.strategy !== 'شراء فوري' && s.entryDetail.discount > 0 && (
-                <div className="flex items-center justify-center gap-1 mt-1">
-                  <ArrowDownLeft className="w-2.5 h-2.5 text-blue-400/50" />
-                  <span className="text-[8px] text-blue-400/70 font-medium">{s.entryDetail.strategy}</span>
-                  <span className="text-[7px] text-blue-500/50 bg-blue-500/10 px-1 rounded">-{s.entryDetail.discount.toFixed(1)}%</span>
+              {s.entryDetail?.discount > 0.1 && s.entryDetail?.strategy && s.entryDetail.strategy !== 'شراء فوري' && (
+                <div className="text-center mt-1 pt-1 border-t border-blue-500/10">
+                  <div className="text-[8px] text-amber-600/80 font-medium">{s.entryDetail.strategy}</div>
+                  <div className="text-[7px] text-emerald-600/60">-{s.entryDetail.discount.toFixed(1)}% عن {s.indicators.close.toFixed(2)}</div>
                 </div>
               )}
             </div>
@@ -578,28 +577,33 @@ export default function ScreenerPage() {
                                 <span className="font-bold text-sm">{s.symbol}</span>
                                 <SignalBadge signal={s.signal} size="sm" />
                               </div>
-                              <p className="text-[9px] text-muted-foreground truncate mt-0.5">{s.name}</p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <p className="text-[9px] text-muted-foreground truncate">{s.name}</p>
+                                <span className="text-[9px] font-mono font-medium text-muted-foreground/70">{s.indicators.close.toFixed(2)} ج.م</span>
+                              </div>
                             </div>
                             <ConfidenceRing value={s.confidence} size={34} />
                           </div>
 
-                          {/* Entry: Buy around price with strategy */}
+                          {/* Entry: Smart price with strategy */}
                           <div className="rounded-lg bg-blue-500/[0.06] border border-blue-500/10 px-2.5 py-2">
                             <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-1.5">
                                 <Target className="w-2.5 h-2.5 text-blue-500" />
                                 <span className="text-[8px] font-semibold text-blue-500/70 uppercase">شراء حول</span>
                               </div>
-                              {s.entryDetail?.discount > 0 && (
-                                <span className="text-[7px] font-medium text-blue-500/60 bg-blue-500/10 px-1 py-0.5 rounded">-{s.entryDetail.discount.toFixed(1)}%</span>
+                              {s.entryDetail?.discount > 0.1 && (
+                                <span className="text-[7px] font-medium text-emerald-600 bg-emerald-500/10 px-1 py-0.5 rounded">-{s.entryDetail.discount.toFixed(1)}% عن السعر</span>
                               )}
                             </div>
                             <div className="text-sm font-bold font-mono text-blue-600 dark:text-blue-400">{s.entryPrice.toFixed(2)} ج.م</div>
                             {s.entryDetail?.strategy && s.entryDetail.strategy !== 'شراء فوري' && (
-                              <div className="flex items-center gap-1 mt-1">
-                                <ArrowDownLeft className="w-2 h-2 text-blue-400/50" />
-                                <span className="text-[7px] text-blue-400/70 font-medium">{s.entryDetail.strategy}</span>
-                                <span className="text-[6px] text-muted-foreground/40">{s.entryDetail.basis}</span>
+                              <div className="mt-1 pt-1 border-t border-blue-500/10">
+                                <div className="flex items-center gap-1">
+                                  <Zap className="w-2.5 h-2.5 text-amber-500/70" />
+                                  <span className="text-[8px] font-semibold text-amber-600/80 dark:text-amber-400/80">{s.entryDetail.strategy}</span>
+                                </div>
+                                <p className="text-[7px] text-muted-foreground/60 mt-0.5 mr-4 leading-relaxed">{s.entryDetail.basis}</p>
                               </div>
                             )}
                           </div>
@@ -861,8 +865,9 @@ export default function ScreenerPage() {
                           <td className="px-3 py-3"><SignalBadge signal={s.signal} /></td>
                           <td className="text-right px-3 py-3">
                             <div className="font-mono text-xs font-medium">{s.entryPrice.toFixed(2)}</div>
-                            {s.entryDetail?.discount > 0 && (
-                              <div className="text-[9px] text-blue-500/60">{s.entryDetail.strategy} -{s.entryDetail.discount.toFixed(1)}%</div>
+                            <div className="font-mono text-[9px] text-muted-foreground/50">السعر: {s.indicators.close.toFixed(2)}</div>
+                            {s.entryDetail?.discount > 0.1 && (
+                              <div className="text-[8px] text-amber-600/70 mt-0.5">{s.entryDetail.strategy} -{s.entryDetail.discount.toFixed(1)}%</div>
                             )}
                           </td>
                           <td className="text-right px-3 py-3">
@@ -1074,6 +1079,7 @@ export default function ScreenerPage() {
                         <SignalBadge signal={s.signal} />
                       </div>
                       <p className="text-[10px] text-muted-foreground truncate max-w-[160px]">{s.name}</p>
+                      <div className="text-[10px] font-mono text-muted-foreground/60">آخر سعر: {s.indicators.close.toFixed(2)} ج.م</div>
                     </div>
                     <ConfidenceRing value={s.confidence} size={36} />
                   </div>
@@ -1086,8 +1092,8 @@ export default function ScreenerPage() {
                     <div className="text-center">
                       <div className="text-[9px] text-muted-foreground">الدخول</div>
                       <div className="text-xs font-mono font-semibold mt-0.5">{s.entryPrice.toFixed(2)}</div>
-                      {s.entryDetail?.discount > 0 && (
-                        <div className="text-[8px] text-blue-500/60 mt-0.5">-{s.entryDetail.discount.toFixed(1)}% {s.entryDetail.strategy}</div>
+                      {s.entryDetail?.discount > 0.1 && s.entryDetail?.strategy && s.entryDetail.strategy !== 'شراء فوري' && (
+                        <div className="text-[8px] text-amber-600/70 mt-0.5">{s.entryDetail.strategy} -{s.entryDetail.discount.toFixed(1)}%</div>
                       )}
                     </div>
                     <div className="text-center">

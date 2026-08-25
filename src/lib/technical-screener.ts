@@ -613,25 +613,23 @@ function nextRoundBelow(price: number): number {
 }
 
 /**
- * calcEntryPrice — Smart entry price using best-fit strategy per stock.
- * 
- * Instead of using close price as entry, this selects the optimal entry zone
- * based on the stock's technical picture. For BUY signals, the entry is BELOW
- * the close (buy the pullback). For SELL signals, entry is ABOVE close.
- * 
- * Strategies evaluated (in priority order):
- *   1. Pullback to EMA20   — Price above EMA20, enter at EMA20 pullback zone
- *   2. Pullback to SMA20   — When EMA20 not available or too far
- *   3. BB Middle Touch      — Price extended above BB middle, enter at SMA20
- *   4. Support Bounce       — Enter near key support (SMA50 / prev low / psych)
- *   5. ATR Pullback        — Default: close minus 0.5×ATR (wait for small dip)
- *   6. Immediate (Market)   — Used when pullback would be too deep or signal is urgent
+ * calcEntryPrice — Context-aware entry price using technical signal analysis.
+ *
+ * Analyzes the SAME rationale tags that generated the Buy signal to determine
+ * the optimal entry strategy. Different patterns require different entries:
+ *
+ * 1. BREAKOUT     → Enter AT the broken resistance (close or slightly above)
+ * 2. REVERSAL     → Enter at close (reversal is happening NOW, don't wait)
+ * 3. PULLBACK     → Enter at MA support below close (buy the dip)
+ * 4. MOMENTUM     → Enter with slight ATR discount
+ * 5. SUPPORT      → Enter at key support level (SMA50/SMA200/psych)
  */
 function calcEntryPrice(
   t: TechnicalIndicators,
   signal: SignalType,
   sl: { price: number; pct: number },
-  tf: Timeframe
+  tf: Timeframe,
+  rationales: SignalRationale[]
 ): EntryPriceDetail {
   const { close, atr, sma20, sma50, sma200, ema20,
           bbUpper, bbLower, high, low } = t;
@@ -640,231 +638,353 @@ function calcEntryPrice(
   const isBull = signal === 'Strong Buy' || signal === 'Buy';
   const isBear = signal === 'Strong Sell' || signal === 'Sell';
 
-  // Maximum acceptable discount from close (don't go too far from market)
-  const maxDiscount = close * 0.03; // 3% max pullback wait
-  // Minimum discount to be meaningful (avoid noise-level entries)
-  const minDiscount = close * 0.002; // 0.2% minimum
-  // Entry must be between SL and close (for buy) or between close and SL (for sell)
-  const slBuffer = close * 0.003; // keep 0.3% away from SL
+  // Build signal context from rationales
+  const tagSet = new Set(rationales.map(r => r.tag));
+  const hasTag = (tag: string) => tagSet.has(tag);
+
+  // Safety constraints
+  const slBuffer = close * 0.003;
+  const maxPullback = close * 0.03; // Don't wait more than 3% pullback
+  const minGap = close * 0.001;    // Minimum 0.1% difference to be meaningful
 
   if (isBull) {
-    // ── BULL ENTRY STRATEGIES ──
-    // We want to enter BELOW close but ABOVE stop-loss
-    const safeSL = sl.price + slBuffer; // don't enter too close to SL
-    const candidates: { price: number; strategy: string; basis: string; rank: number }[] = [];
+    const safeSL = sl.price + slBuffer;
 
-    // Strategy 1: Pullback to EMA20 (best for trending stocks)
-    if (ema20 > 0 && ema20 < close) {
-      const dist = close - ema20;
-      const discPct = (dist / close) * 100;
-      if (ema20 >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
-        // Check if price is in an uptrend relative to EMA20
-        const trendStrength = sma50 > 0 && ema20 > sma50; // EMA20 above SMA50 = strong trend
-        candidates.push({
-          price: ema20,
-          strategy: 'ارتداد لمتوسط EMA20',
-          basis: `EMA20 @ ${round2(ema20)}`,
-          rank: trendStrength ? 1 : 3,
-        });
+    // ═══════════════════════════════════════════════════════════
+    // PATTERN DETECTION — determine what kind of setup this is
+    // ═══════════════════════════════════════════════════════════
+
+    const isBreakout = (
+      // Price just broke above a major MA (was below, now above)
+      hasTag('Above SMA50') || hasTag('Above SMA200') ||
+      // BB squeeze with bullish bias
+      hasTag('BB Squeeze') ||
+      // Strong volume confirming breakout
+      hasTag('Volume Spike Up') || hasTag('Strong Volume Up')
+    ) && (
+      // Confirm price is near the breakout level (not far above)
+      (sma50 > 0 && close > sma50 && (close - sma50) / close < 0.03) ||
+      (sma200 > 0 && close > sma200 && (close - sma200) / close < 0.03)
+    );
+
+    const isReversal = (
+      // Oversold signals firing
+      hasTag('RSI Oversold') || hasTag('Stoch Oversold') ||
+      hasTag('BB Lower Touch') ||
+      // MACD crossover happening
+      hasTag('MACD Cross Up') ||
+      // Stochastic bullish cross
+      hasTag('Stoch Bull Cross')
+    );
+
+    const isMomentum = (
+      // Strong bullish momentum confirmed
+      hasTag('MACD Bullish') || hasTag('MACD Above Signal') ||
+      hasTag('MACD Histogram Strong') || hasTag('Stoch Bull Cross')
+    ) && !isReversal;
+
+    const isUptrend = (
+      hasTag('Bullish MA Stack') ||
+      (hasTag('Above SMA20') && hasTag('Above SMA50')) ||
+      hasTag('Above SMA200')
+    );
+
+    // ═══════════════════════════════════════════════════════════
+    // STRATEGY 1: BREAKOUT ENTRY
+    // Enter AT the broken resistance level (it becomes support)
+    // ═══════════════════════════════════════════════════════════
+    if (isBreakout) {
+      // Find the resistance that was just broken
+      let breakoutLevel = 0;
+      let breakoutName = '';
+
+      // Check SMA200 breakout (major)
+      if (sma200 > 0 && close > sma200 && (close - sma200) / close < 0.02) {
+        breakoutLevel = sma200;
+        breakoutName = 'اختراق SMA200';
+      }
+      // Check SMA50 breakout
+      else if (sma50 > 0 && close > sma50 && (close - sma50) / close < 0.02) {
+        breakoutLevel = sma50;
+        breakoutName = 'اختراق SMA50';
+      }
+      // BB squeeze breakout
+      else if (bbUpper > 0 && bbLower > 0) {
+        const bbMid = (bbUpper + bbLower) / 2;
+        if (close > bbMid && close < bbMid * 1.02) {
+          breakoutLevel = bbMid;
+          breakoutName = 'اختراق ضغط البولينجر';
+        }
+      }
+      // Previous high breakout
+      if (breakoutLevel <= 0 && high > 0 && close >= high * 0.995) {
+        breakoutLevel = high;
+        breakoutName = 'اختراق أعلى سابق';
+      }
+
+      if (breakoutLevel > 0 && breakoutLevel >= safeSL) {
+        // Enter AT the breakout level (old resistance = new support)
+        const entryPrice = Math.max(breakoutLevel, safeSL);
+        const disc = round2(((close - entryPrice) / close) * 100);
+        return {
+          price: round2(entryPrice),
+          strategy: breakoutName,
+          basis: `دخول عند ${round2(breakoutLevel)} (المقاومة المكسورة = دعم جديد)`,
+          discount: disc,
+        };
       }
     }
 
-    // Strategy 2: Pullback to SMA20
-    if (sma20 > 0 && sma20 < close) {
-      const dist = close - sma20;
-      if (sma20 >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
-        const isEMA20Far = ema20 <= 0 || (close - ema20) > maxDiscount;
-        candidates.push({
-          price: sma20,
-          strategy: 'ارتداد لمتوسط SMA20',
-          basis: `SMA20 @ ${round2(sma20)}`,
-          rank: isEMA20Far ? 1 : 4,
-        });
+    // ═══════════════════════════════════════════════════════════
+    // STRATEGY 2: REVERSAL ENTRY
+    // Don't wait — the reversal is happening NOW, enter at close
+    // ═══════════════════════════════════════════════════════════
+    if (isReversal) {
+      let revDetail = 'اشارة ارتداد فعّالة';
+
+      // Determine the specific reversal type
+      if (hasTag('RSI Oversold') && hasTag('Stoch Oversold')) {
+        revDetail = 'تشبع بيعي مزدوج (RSI + Stoch)';
+      } else if (hasTag('RSI Oversold')) {
+        revDetail = 'ارتداد من تشبع بيعي RSI';
+      } else if (hasTag('Stoch Oversold')) {
+        revDetail = 'ارتداد من تشبع بيعي Stoch';
+      } else if (hasTag('BB Lower Touch')) {
+        revDetail = 'ارتداد من الحد السفلي BB';
+      } else if (hasTag('MACD Cross Up')) {
+        revDetail = 'تقاطع MACD صاعد';
+      } else if (hasTag('Stoch Bull Cross')) {
+        revDetail = 'تقاطع Stochastic صاعد';
+      }
+
+      // For reversal, enter at close or very slight discount (0.2× ATR)
+      const revEntry = close - safeAtr * 0.2 * atrMul;
+      const finalEntry = Math.max(revEntry, safeSL);
+      const disc = round2(((close - finalEntry) / close) * 100);
+      return {
+        price: round2(finalEntry),
+        strategy: 'دخول عند الارتداد',
+        basis: revDetail,
+        discount: disc,
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // STRATEGY 3: PULLBACK ENTRY (in established uptrend)
+    // Wait for price to pull back to MA support before entering
+    // ═══════════════════════════════════════════════════════════
+    if (isUptrend) {
+      const pullbackCandidates: { price: number; strategy: string; basis: string; rank: number }[] = [];
+
+      // EMA20 pullback (best — most responsive in trends)
+      if (ema20 > 0 && ema20 < close && ema20 >= safeSL) {
+        const dist = close - ema20;
+        if (dist <= maxPullback && dist >= minGap) {
+          const strongTrend = sma50 > 0 && ema20 > sma50;
+          pullbackCandidates.push({
+            price: ema20,
+            strategy: 'سحب لـ EMA20',
+            basis: `EMA20 @ ${round2(ema20)}`,
+            rank: strongTrend ? 1 : 3,
+          });
+        }
+      }
+
+      // SMA20 pullback
+      if (sma20 > 0 && sma20 < close && sma20 >= safeSL) {
+        const dist = close - sma20;
+        if (dist <= maxPullback && dist >= minGap) {
+          pullbackCandidates.push({
+            price: sma20,
+            strategy: 'سحب لـ SMA20',
+            basis: `SMA20 @ ${round2(sma20)}`,
+            rank: 4,
+          });
+        }
+      }
+
+      // SMA50 pullback (deeper pullback in strong trends)
+      if (sma50 > 0 && sma50 < close && sma50 >= safeSL) {
+        const dist = close - sma50;
+        if (dist <= maxPullback) {
+          const nearSMA50 = dist < safeAtr * 1.5;
+          pullbackCandidates.push({
+            price: sma50,
+            strategy: 'سحب لـ SMA50',
+            basis: `SMA50 @ ${round2(sma50)}`,
+            rank: nearSMA50 ? 2 : 5,
+          });
+        }
+      }
+
+      if (pullbackCandidates.length > 0) {
+        pullbackCandidates.sort((a, b) => a.rank - b.rank);
+        const chosen = pullbackCandidates[0];
+        const finalPrice = clamp(chosen.price, safeSL, close - minGap);
+        const disc = round2(((close - finalPrice) / close) * 100);
+        return {
+          price: round2(finalPrice),
+          strategy: chosen.strategy,
+          basis: `انتظار ارتداد لـ ${chosen.basis}`,
+          discount: disc,
+        };
       }
     }
 
-    // Strategy 3: Bollinger Band Middle reversion
-    // When price is extended (near BB upper), enter at the middle band (SMA20)
-    if (bbUpper > 0 && bbLower > 0) {
-      const bbMid = (bbUpper + bbLower) / 2;
-      const bbPos = (close - bbLower) / (bbUpper - bbLower); // 0=lower, 1=upper
-      if (bbPos > 0.7 && bbMid > 0 && bbMid < close && bbMid >= safeSL) {
-        const dist = close - bbMid;
-        if (dist <= maxDiscount && dist >= minDiscount) {
-          candidates.push({
-            price: bbMid,
-            strategy: 'ارتداد لوسط البولينجر',
-            basis: `BB Middle @ ${round2(bbMid)}`,
+    // ═══════════════════════════════════════════════════════════
+    // STRATEGY 4: MOMENTUM ENTRY
+    // Strong momentum — enter with slight ATR discount only
+    // ═══════════════════════════════════════════════════════════
+    if (isMomentum) {
+      const momEntry = close - safeAtr * 0.3 * atrMul;
+      const finalEntry = Math.max(momEntry, safeSL);
+      const disc = round2(((close - finalEntry) / close) * 100);
+
+      let momDetail = 'زخم صاعد قوي';
+      if (hasTag('MACD Above Signal')) momDetail = 'زخم MACD صاعد';
+      if (hasTag('MACD Histogram Strong')) momDetail = 'زخم متزايد';
+
+      return {
+        price: round2(finalEntry),
+        strategy: 'دخول مع الزخم',
+        basis: momDetail,
+        discount: disc,
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // STRATEGY 5: SUPPORT BOUNCE
+    // Price at a key support — enter at the support level
+    // ═══════════════════════════════════════════════════════════
+    {
+      const supportCandidates: { price: number; strategy: string; basis: string; rank: number }[] = [];
+
+      // SMA50 as support
+      if (sma50 > 0 && sma50 < close && sma50 >= safeSL) {
+        const dist = close - sma50;
+        if (dist <= maxPullback && dist < safeAtr * 1.2) {
+          supportCandidates.push({
+            price: sma50,
+            strategy: 'دعم SMA50',
+            basis: `SMA50 @ ${round2(sma50)}`,
+            rank: 1,
+          });
+        }
+      }
+
+      // SMA200 as support
+      if (sma200 > 0 && sma200 < close && sma200 >= safeSL) {
+        const dist = close - sma200;
+        if (dist <= maxPullback) {
+          supportCandidates.push({
+            price: sma200,
+            strategy: 'دعم SMA200',
+            basis: `SMA200 @ ${round2(sma200)}`,
             rank: 2,
           });
         }
       }
-    }
 
-    // Strategy 4: Support bounce at SMA50
-    if (sma50 > 0 && sma50 < close) {
-      const dist = close - sma50;
-      if (sma50 >= safeSL && dist <= maxDiscount) {
-        // Good when price recently bounced off SMA50
-        const nearSMA50 = dist < safeAtr * 1.5;
-        candidates.push({
-          price: sma50,
-          strategy: 'دعم SMA50',
-          basis: `SMA50 @ ${round2(sma50)}`,
-          rank: nearSMA50 ? 2 : 5,
-        });
+      // Previous day low
+      if (low > 0 && low < close && low >= safeSL) {
+        const dist = close - low;
+        if (dist <= maxPullback && dist >= minGap) {
+          supportCandidates.push({
+            price: low,
+            strategy: 'أدنى الجلسة كدعم',
+            basis: `أدنى @ ${round2(low)}`,
+            rank: 3,
+          });
+        }
+      }
+
+      // Psychological level
+      const psychBelow = nextRoundBelow(close);
+      if (psychBelow > 0 && psychBelow < close && psychBelow >= safeSL) {
+        const dist = close - psychBelow;
+        if (dist <= maxPullback && dist >= minGap) {
+          supportCandidates.push({
+            price: psychBelow,
+            strategy: 'مستوى نفسي',
+            basis: `مستوى ${round2(psychBelow)}`,
+            rank: 4,
+          });
+        }
+      }
+
+      if (supportCandidates.length > 0) {
+        supportCandidates.sort((a, b) => a.rank - b.rank);
+        const chosen = supportCandidates[0];
+        const finalPrice = clamp(chosen.price, safeSL, close - minGap);
+        const disc = round2(((close - finalPrice) / close) * 100);
+        return {
+          price: round2(finalPrice),
+          strategy: chosen.strategy,
+          basis: `دخول عند ${chosen.basis}`,
+          discount: disc,
+        };
       }
     }
 
-    // Strategy 5: Previous day low bounce
-    if (low > 0 && low < close) {
-      const dist = close - low;
-      if (low >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
-        candidates.push({
-          price: low,
-          strategy: 'ارتداد لأدنى الجلسة',
-          basis: `أدنى سابق @ ${round2(low)}`,
-          rank: 6,
-        });
-      }
-    }
-
-    // Strategy 6: Psychological level bounce
-    const psychBelow = nextRoundBelow(close);
-    if (psychBelow > 0 && psychBelow < close) {
-      const dist = close - psychBelow;
-      if (psychBelow >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
-        candidates.push({
-          price: psychBelow,
-          strategy: 'مستوى نفسي',
-          basis: `مستوى ${round2(psychBelow)}`,
-          rank: 7,
-        });
-      }
-    }
-
-    // Strategy 7: ATR Pullback (default — always available)
+    // ═══════════════════════════════════════════════════════════
+    // FALLBACK: ATR-based entry
+    // ═══════════════════════════════════════════════════════════
     const atrEntry = close - safeAtr * 0.5 * atrMul;
     if (atrEntry >= safeSL) {
-      candidates.push({
-        price: atrEntry,
+      const disc = round2(((close - atrEntry) / close) * 100);
+      return {
+        price: round2(atrEntry),
         strategy: 'سحب جزئي (ATR)',
         basis: `0.5× ATR @ ${round2(atrEntry)}`,
-        rank: 8,
-      });
-    }
-
-    // Sort by rank (lower = better), pick best
-    candidates.sort((a, b) => a.rank - b.rank);
-
-    if (candidates.length > 0) {
-      const chosen = candidates[0];
-      const finalPrice = clamp(chosen.price, safeSL, close - minDiscount);
-      const discount = round2(((close - finalPrice) / close) * 100);
-      return {
-        price: round2(finalPrice),
-        strategy: chosen.strategy,
-        basis: chosen.basis,
-        discount,
+        discount: disc,
       };
     }
 
-    // Fallback: immediate entry at close (no meaningful pullback zone)
-    return {
-      price: round2(close),
-      strategy: 'شراء فوري',
-      basis: 'سعر السوق الحالي',
-      discount: 0,
-    };
+    return { price: round2(close), strategy: 'شراء فوري', basis: 'سعر السوق الحالي', discount: 0 };
 
   } else if (isBear) {
-    // ── BEAR ENTRY STRATEGIES (short) ──
+    // ── BEAR (SHORT) ENTRY STRATEGIES ──
     const safeSL = sl.price - slBuffer;
-    const candidates: { price: number; strategy: string; basis: string; rank: number }[] = [];
 
-    // Pullback to EMA20 (from below)
-    if (ema20 > 0 && ema20 > close) {
-      const dist = ema20 - close;
-      if (ema20 <= safeSL && dist <= maxDiscount && dist >= minDiscount) {
-        candidates.push({
-          price: ema20,
-          strategy: 'ارتداد لمتوسط EMA20',
-          basis: `EMA20 @ ${round2(ema20)}`,
-          rank: 1,
-        });
+    const isReversal = hasTag('RSI Overbought') || hasTag('Stoch Overbought') ||
+      hasTag('BB Upper Touch') || hasTag('MACD Cross Down') || hasTag('Stoch Bear Cross');
+
+    const isBreakdown = hasTag('Below SMA50') || hasTag('Below SMA200') ||
+      hasTag('BB Squeeze') || hasTag('Volume Spike Down');
+
+    if (isReversal) {
+      const revEntry = close + safeAtr * 0.2 * atrMul;
+      const finalEntry = Math.min(revEntry, safeSL);
+      const disc = round2(((finalEntry - close) / close) * 100);
+      return { price: round2(finalEntry), strategy: 'دخول عند الارتداد', basis: 'اشارة ارتداد هابطة', discount: disc };
+    }
+
+    if (isBreakdown) {
+      let breakdownLevel = 0;
+      let breakdownName = '';
+      if (sma50 > 0 && close < sma50 && (sma50 - close) / close < 0.02) {
+        breakdownLevel = sma50; breakdownName = 'كسر SMA50';
+      } else if (sma200 > 0 && close < sma200 && (sma200 - close) / close < 0.02) {
+        breakdownLevel = sma200; breakdownName = 'كسر SMA200';
+      }
+      if (breakdownLevel > 0 && breakdownLevel <= safeSL) {
+        const disc = round2(((breakdownLevel - close) / close) * 100);
+        return { price: round2(breakdownLevel), strategy: breakdownName, basis: `دخول عند كسر الدعم @ ${round2(breakdownLevel)}`, discount: disc };
       }
     }
 
-    // Pullback to SMA20
-    if (sma20 > 0 && sma20 > close) {
-      const dist = sma20 - close;
-      if (sma20 <= safeSL && dist <= maxDiscount && dist >= minDiscount) {
-        candidates.push({
-          price: sma20,
-          strategy: 'ارتداد لمتوسط SMA20',
-          basis: `SMA20 @ ${round2(sma20)}`,
-          rank: 2,
-        });
-      }
-    }
-
-    // BB Middle (price extended below)
-    if (bbUpper > 0 && bbLower > 0) {
-      const bbMid = (bbUpper + bbLower) / 2;
-      const bbPos = (close - bbLower) / (bbUpper - bbLower);
-      if (bbPos < 0.3 && bbMid > close && bbMid <= safeSL) {
-        const dist = bbMid - close;
-        if (dist <= maxDiscount && dist >= minDiscount) {
-          candidates.push({
-            price: bbMid,
-            strategy: 'ارتداد لوسط البولينجر',
-            basis: `BB Middle @ ${round2(bbMid)}`,
-            rank: 2,
-          });
-        }
-      }
-    }
-
-    // ATR pullback up
+    // Default bear: ATR pullback up
     const atrEntry = close + safeAtr * 0.5 * atrMul;
     if (atrEntry <= safeSL) {
-      candidates.push({
-        price: atrEntry,
-        strategy: 'سحب جزئي (ATR)',
-        basis: `0.5× ATR @ ${round2(atrEntry)}`,
-        rank: 8,
-      });
+      const disc = round2(((atrEntry - close) / close) * 100);
+      return { price: round2(atrEntry), strategy: 'سحب جزئي (ATR)', basis: `0.5× ATR @ ${round2(atrEntry)}`, discount: disc };
     }
 
-    candidates.sort((a, b) => a.rank - b.rank);
-    if (candidates.length > 0) {
-      const chosen = candidates[0];
-      const finalPrice = clamp(chosen.price, close + minDiscount, safeSL);
-      const discount = round2(((finalPrice - close) / close) * 100);
-      return {
-        price: round2(finalPrice),
-        strategy: chosen.strategy,
-        basis: chosen.basis,
-        discount,
-      };
-    }
-
-    return {
-      price: round2(close),
-      strategy: 'بيع فوري',
-      basis: 'سعر السوق الحالي',
-      discount: 0,
-    };
-
+    return { price: round2(close), strategy: 'بيع فوري', basis: 'سعر السوق الحالي', discount: 0 };
   }
 
-  // Hold: use close as entry
-  return {
-    price: round2(close),
-    strategy: 'سعر السوق',
-    basis: 'سعر الإغلاق',
-    discount: 0,
-  };
+  // Hold: use close
+  return { price: round2(close), strategy: 'سعر السوق', basis: 'سعر الإغلاق', discount: 0 };
 }
 
 function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe): { price: number; pct: number } {
@@ -1160,7 +1280,7 @@ export async function runTechnicalScreener(
 
     // SL, TP, Entry, R:R
     const sl = calcStopLoss(t, signal, p.timeframe);
-    const entry = calcEntryPrice(t, signal, sl, p.timeframe);
+    const entry = calcEntryPrice(t, signal, sl, p.timeframe, allRationales);
     const tps = calcTakeProfits(t, signal, p.timeframe);
     const risk = Math.abs(entry.price - sl.price);
     const reward = tps.length > 0 ? Math.abs(tps[0].price - entry.price) : 0;
