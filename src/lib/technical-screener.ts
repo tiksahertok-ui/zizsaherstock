@@ -565,80 +565,253 @@ function classifySignal(rawScore: number, params: ScreenerParameters): SignalTyp
 }
 
 // ── Stop-Loss & Take-Profit ──────────────────────────────────
+// EGX-Optimized v3: Uses structural levels (swing, MA confluence, BB),
+// psychological levels (round numbers), circuit-breaker awareness (5%),
+// and ATR volatility scaling for the Egyptian market.
+//
+// Methodology (inspired by best EGX trading practices):
+//   SL:  Nearest structural support/resistance + ATR floor/ceiling
+//   TP1: First logical target (BB Upper, SMA50, round number, or 1.5×ATR)
+//        — high probability (60-70%), take 40% of position
+//   TP2: Intermediate target (SMA200, 50% of 52W range, or 3×ATR)
+//        — medium probability (35-45%), take 35% of position
+//   TP3: Extended target (52W High, 80% of 52W range, or 5×ATR)
+//        — low probability (15-25%), take 25% of position
+
+/** Round a price to the nearest EGX psychological level (0.50, 1.00, 5.00, 10.00, etc.) */
+function nearestPsychLevel(price: number, direction: 1 | -1): number {
+  // Determine the tick based on price magnitude
+  const mag = Math.pow(10, Math.floor(Math.log10(Math.max(price, 0.01))));
+  const ticks = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50, 100];
+  const tick = ticks.find(t => t >= mag * 0.05) || mag * 0.1;
+  const rounded = Math.round(price / tick) * tick;
+  // For bullish: find the next round level ABOVE price
+  // For bearish: find the next round level BELOW price
+  if (direction === 1) {
+    return rounded > price ? rounded : rounded + tick;
+  } else {
+    return rounded < price ? rounded : rounded - tick;
+  }
+}
+
+/** Find nearest round level above price (for TP) */
+function nextRoundAbove(price: number): number {
+  return nearestPsychLevel(price, 1);
+}
+
+/** Find nearest round level below price (for SL) */
+function nextRoundBelow(price: number): number {
+  return nearestPsychLevel(price, -1);
+}
 
 function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe): { price: number; pct: number } {
-  const { close, atr, sma20, sma50, sma100, sma200, bbLower, bbUpper } = t;
+  const { close, atr, sma20, sma50, sma100, sma200, bbLower, bbUpper, high, low } = t;
   const atrMul = TF_ADJUST[tf].atrMultiplier;
   const safeAtr = atr > 0 ? atr : close * 0.02;
 
+  // EGX Circuit breaker: 5% max daily move for most stocks
+  const maxDailyMove = close * 0.05;
+  // SL should not be tighter than 1.5% (noise floor) or wider than 5% (circuit breaker)
+  const minSLDist = close * 0.015;
+  const maxSLDist = Math.min(safeAtr * 3.5 * atrMul, maxDailyMove);
+
   if (signal === 'Strong Buy' || signal === 'Buy') {
-    // Long: SL below support levels
-    const atrSL = close - (safeAtr * 2 * atrMul);
-    const s20 = sma20 > 0 ? sma20 : close * 0.98;
-    const s50 = sma50 > 0 ? sma50 : close * 0.96;
-    const bbSl = bbLower > 0 ? bbLower : close * 0.97;
-    // Tightest SL below price
-    const sl = Math.max(atrSL, Math.min(s20, s50, bbSl));
-    const finalSL = Math.min(sl, close * 0.995);
+    // Long: SL below nearest structural support
+    // Candidates: SMA20, SMA50, BB Lower, previous day low, round number
+    const candidates: { level: number; name: string }[] = [];
+    if (sma20 > 0 && sma20 < close) candidates.push({ level: sma20, name: 'SMA20' });
+    if (sma50 > 0 && sma50 < close) candidates.push({ level: sma50, name: 'SMA50' });
+    if (bbLower > 0 && bbLower < close) candidates.push({ level: bbLower, name: 'BB Lower' });
+    if (low > 0 && low < close) candidates.push({ level: low, name: 'Previous Low' });
+    // Round number below
+    const rndBelow = nextRoundBelow(close);
+    if (rndBelow > 0 && rndBelow < close) candidates.push({ level: rndBelow, name: 'Psychological Level' });
+    // ATR fallback
+    const atrSL = close - safeAtr * 2 * atrMul;
+    candidates.push({ level: atrSL, name: '2× ATR' });
+
+    // Sort by distance from close (ascending = nearest first)
+    candidates.sort((a, b) => (close - a.level) - (close - b.level));
+    // Pick the nearest support that's at least minSLDist away
+    let chosenSL = atrSL; // fallback
+    for (const c of candidates) {
+      const dist = close - c.level;
+      if (dist >= minSLDist && dist <= maxSLDist) {
+        chosenSL = c.level;
+        break;
+      }
+    }
+    // Clamp to min/max bounds
+    const finalSL = clamp(chosenSL, close - maxSLDist, close - minSLDist);
     const pct = safeDiv(close - finalSL, close, 0) * 100;
     return { price: round2(finalSL), pct: round2(pct) };
+
   } else if (signal === 'Strong Sell' || signal === 'Sell') {
-    // Short: SL above resistance
-    const atrSL = close + (safeAtr * 2 * atrMul);
-    const s20 = sma20 > 0 ? sma20 : close * 1.02;
-    const s50 = sma50 > 0 ? sma50 : close * 1.04;
-    const bbSl = bbUpper > 0 ? bbUpper : close * 1.03;
-    const sl = Math.min(atrSL, Math.max(s20, s50, bbSl));
-    const finalSL = Math.max(sl, close * 1.005);
+    // Short: SL above nearest structural resistance
+    const candidates: { level: number; name: string }[] = [];
+    if (sma20 > 0 && sma20 > close) candidates.push({ level: sma20, name: 'SMA20' });
+    if (sma50 > 0 && sma50 > close) candidates.push({ level: sma50, name: 'SMA50' });
+    if (bbUpper > 0 && bbUpper > close) candidates.push({ level: bbUpper, name: 'BB Upper' });
+    if (high > 0 && high > close) candidates.push({ level: high, name: 'Previous High' });
+    const rndAbove = nextRoundAbove(close);
+    if (rndAbove > close) candidates.push({ level: rndAbove, name: 'Psychological Level' });
+    const atrSL = close + safeAtr * 2 * atrMul;
+    candidates.push({ level: atrSL, name: '2× ATR' });
+
+    candidates.sort((a, b) => (a.level - close) - (b.level - close));
+    let chosenSL = atrSL;
+    for (const c of candidates) {
+      const dist = c.level - close;
+      if (dist >= minSLDist && dist <= maxSLDist) {
+        chosenSL = c.level;
+        break;
+      }
+    }
+    const finalSL = clamp(chosenSL, close + minSLDist, close + maxSLDist);
     const pct = safeDiv(finalSL - close, close, 0) * 100;
     return { price: round2(finalSL), pct: round2(pct) };
   }
 
-  // FIX: Hold — direction-aware SL based on trend
+  // Hold — direction-aware SL based on trend
   const trendBias = (sma50 > 0 && close > sma50) || (sma200 > 0 && close > sma200);
-  if (trendBias) {
-    const sl = close - (safeAtr * 2.5 * atrMul);
-    const pct = safeDiv(close - sl, close, 0) * 100;
-    return { price: round2(sl), pct: round2(pct) };
-  } else {
-    const sl = close + (safeAtr * 2.5 * atrMul);
-    const pct = safeDiv(sl - close, close, 0) * 100;
-    return { price: round2(sl), pct: round2(pct) };
-  }
+  const dir = trendBias ? -1 : 1;
+  const sl = close + dir * Math.max(safeAtr * 2 * atrMul, minSLDist);
+  const pct = safeDiv(Math.abs(sl - close), close, 0) * 100;
+  return { price: round2(sl), pct: round2(pct) };
 }
 
 function calcTakeProfits(t: TechnicalIndicators, signal: SignalType, tf: Timeframe): TakeProfitTarget[] {
-  const { close, atr, sma200, sma50, bbUpper, bbLower, week52High, week52Low } = t;
+  const { close, atr, sma20, sma50, sma100, sma200, bbUpper, bbLower, week52High, week52Low, high, low } = t;
   const atrMul = TF_ADJUST[tf].atrMultiplier;
   const safeAtr = atr > 0 ? atr : close * 0.02;
   const isBull = signal === 'Strong Buy' || signal === 'Buy';
+  const isBear = signal === 'Strong Sell' || signal === 'Sell';
   const tps: TakeProfitTarget[] = [];
 
+  // 52W range context
+  const w52Range = (week52High > 0 && week52Low > 0) ? week52High - week52Low : 0;
+  const w52Pos = w52Range > 0 ? (close - week52Low) / w52Range : 0.5; // 0=at low, 1=at high
+  // EGX circuit breaker: 5% max daily move
+  const maxDailyGain = close * 0.05;
+
   if (isBull) {
-    const tp1 = round2(close + safeAtr * 1.5 * atrMul);
-    tps.push({ level: 1, price: tp1, basis: `${round2(1.5 * atrMul)}× ATR`, probability: 'High' });
+    // ── TP1: Conservative — nearest logical target (40% of position) ──
+    const tp1Candidates: { price: number; basis: string }[] = [];
+    if (bbUpper > 0 && bbUpper > close) tp1Candidates.push({ price: bbUpper, basis: 'BB Upper' });
+    if (sma50 > 0 && sma50 > close && sma50 < close + maxDailyGain * 3) tp1Candidates.push({ price: sma50, basis: 'SMA50' });
+    const rnd1 = nextRoundAbove(close);
+    if (rnd1 > close && rnd1 < close + maxDailyGain * 3) tp1Candidates.push({ price: rnd1, basis: 'مستوى نفسي' });
+    const atrTP1 = close + safeAtr * 1.5 * atrMul;
+    tp1Candidates.push({ price: atrTP1, basis: `${round2(1.5 * atrMul)}× ATR` });
+    // Pick nearest target that's at least 0.75× ATR away
+    const minTP1Dist = safeAtr * 0.75 * atrMul;
+    tp1Candidates.sort((a, b) => a.price - b.price);
+    let tp1 = atrTP1;
+    for (const c of tp1Candidates) {
+      if (c.price - close >= minTP1Dist) { tp1 = c.price; break; }
+    }
+    // Find which basis was chosen
+    const tp1Basis = tp1Candidates.find(c => Math.abs(c.price - tp1) < 0.01)?.basis || `${round2(1.5 * atrMul)}× ATR`;
+    tps.push({ level: 1, price: round2(tp1), basis: tp1Basis, probability: 'High' });
 
-    const tp2a = bbUpper > 0 ? bbUpper : close + safeAtr * 2.5 * atrMul;
-    tps.push({ level: 2, price: round2(tp2a), basis: bbUpper > 0 ? 'BB Upper Band' : `${round2(2.5 * atrMul)}× ATR`, probability: 'Medium' });
+    // ── TP2: Moderate — intermediate target (35% of position) ──
+    const tp2Candidates: { price: number; basis: string }[] = [];
+    if (sma200 > 0 && sma200 > close && sma200 > tp1) tp2Candidates.push({ price: sma200, basis: 'SMA200' });
+    // 50% of 52W range from current position
+    if (w52Range > 0) {
+      const target50 = close + w52Range * (1 - w52Pos) * 0.5;
+      if (target50 > tp1 + minTP1Dist) tp2Candidates.push({ price: target50, basis: '50% نطاق 52أ' });
+    }
+    const rnd2 = nextRoundAbove(tp1);
+    if (rnd2 > tp1 + minTP1Dist) tp2Candidates.push({ price: rnd2, basis: 'مستوى نفسي' });
+    const atrTP2 = close + safeAtr * 3 * atrMul;
+    tp2Candidates.push({ price: atrTP2, basis: `${round2(3 * atrMul)}× ATR` });
+    tp2Candidates.sort((a, b) => a.price - b.price);
+    let tp2 = atrTP2;
+    for (const c of tp2Candidates) {
+      if (c.price > tp1 + minTP1Dist) { tp2 = c.price; break; }
+    }
+    const tp2Basis = tp2Candidates.find(c => Math.abs(c.price - tp2) < 0.01)?.basis || `${round2(3 * atrMul)}× ATR`;
+    tps.push({ level: 2, price: round2(tp2), basis: tp2Basis, probability: 'Medium' });
 
-    const tp3a = week52High > 0 ? week52High : close + safeAtr * 4 * atrMul;
-    tps.push({ level: 3, price: round2(tp3a), basis: week52High > 0 ? '52-Week High' : `${round2(4 * atrMul)}× ATR`, probability: 'Low' });
-  } else if (signal === 'Sell' || signal === 'Strong Sell') {
-    const tp1 = round2(close - safeAtr * 1.5 * atrMul);
-    tps.push({ level: 1, price: tp1, basis: `${round2(1.5 * atrMul)}× ATR`, probability: 'High' });
+    // ── TP3: Aggressive — extended target (25% of position) ──
+    const tp3Candidates: { price: number; basis: string }[] = [];
+    if (week52High > 0 && week52High > tp2) tp3Candidates.push({ price: week52High, basis: '52أسبوع أعلى' });
+    // 80% of 52W range
+    if (w52Range > 0) {
+      const target80 = close + w52Range * (1 - w52Pos) * 0.8;
+      if (target80 > tp2 + minTP1Dist) tp3Candidates.push({ price: target80, basis: '80% نطاق 52أ' });
+    }
+    const atrTP3 = close + safeAtr * 5 * atrMul;
+    tp3Candidates.push({ price: atrTP3, basis: `${round2(5 * atrMul)}× ATR` });
+    tp3Candidates.sort((a, b) => a.price - b.price);
+    let tp3 = atrTP3;
+    for (const c of tp3Candidates) {
+      if (c.price > tp2 + minTP1Dist) { tp3 = c.price; break; }
+    }
+    const tp3Basis = tp3Candidates.find(c => Math.abs(c.price - tp3) < 0.01)?.basis || `${round2(5 * atrMul)}× ATR`;
+    tps.push({ level: 3, price: round2(tp3), basis: tp3Basis, probability: 'Low' });
 
-    const tp2a = bbLower > 0 ? bbLower : close - safeAtr * 2.5 * atrMul;
-    tps.push({ level: 2, price: round2(tp2a), basis: bbLower > 0 ? 'BB Lower Band' : `${round2(2.5 * atrMul)}× ATR`, probability: 'Medium' });
+  } else if (isBear) {
+    const minTPDist = safeAtr * 0.75 * atrMul;
 
-    const tp3a = week52Low > 0 ? week52Low : close - safeAtr * 4 * atrMul;
-    tps.push({ level: 3, price: round2(tp3a), basis: week52Low > 0 ? '52-Week Low' : `${round2(4 * atrMul)}× ATR`, probability: 'Low' });
-  }
+    // TP1
+    const tp1Candidates: { price: number; basis: string }[] = [];
+    if (bbLower > 0 && bbLower < close) tp1Candidates.push({ price: bbLower, basis: 'BB Lower' });
+    if (sma50 > 0 && sma50 < close && close - sma50 < close * 0.15) tp1Candidates.push({ price: sma50, basis: 'SMA50' });
+    const rnd1 = nextRoundBelow(close);
+    if (rnd1 < close && close - rnd1 < close * 0.15) tp1Candidates.push({ price: rnd1, basis: 'مستوى نفسي' });
+    const atrTP1 = close - safeAtr * 1.5 * atrMul;
+    tp1Candidates.push({ price: atrTP1, basis: `${round2(1.5 * atrMul)}× ATR` });
+    tp1Candidates.sort((a, b) => b.price - a.price);
+    let tp1 = atrTP1;
+    for (const c of tp1Candidates) {
+      if (close - c.price >= minTPDist) { tp1 = c.price; break; }
+    }
+    const tp1Basis = tp1Candidates.find(c => Math.abs(c.price - tp1) < 0.01)?.basis || `${round2(1.5 * atrMul)}× ATR`;
+    tps.push({ level: 1, price: round2(tp1), basis: tp1Basis, probability: 'High' });
 
-  // Hold signals: generate directional TPs based on trend bias
-  if (tps.length === 0) {
-    const trendUp = sma50 > 0 && close > sma50;
+    // TP2
+    const tp2Candidates: { price: number; basis: string }[] = [];
+    if (sma200 > 0 && sma200 < close && sma200 < tp1) tp2Candidates.push({ price: sma200, basis: 'SMA200' });
+    if (w52Range > 0) {
+      const target50 = close - w52Range * w52Pos * 0.5;
+      if (target50 < tp1 - minTPDist) tp2Candidates.push({ price: target50, basis: '50% نطاق 52أ' });
+    }
+    const atrTP2 = close - safeAtr * 3 * atrMul;
+    tp2Candidates.push({ price: atrTP2, basis: `${round2(3 * atrMul)}× ATR` });
+    tp2Candidates.sort((a, b) => b.price - a.price);
+    let tp2 = atrTP2;
+    for (const c of tp2Candidates) {
+      if (c.price < tp1 - minTPDist) { tp2 = c.price; break; }
+    }
+    const tp2Basis = tp2Candidates.find(c => Math.abs(c.price - tp2) < 0.01)?.basis || `${round2(3 * atrMul)}× ATR`;
+    tps.push({ level: 2, price: round2(tp2), basis: tp2Basis, probability: 'Medium' });
+
+    // TP3
+    const tp3Candidates: { price: number; basis: string }[] = [];
+    if (week52Low > 0 && week52Low < tp2) tp3Candidates.push({ price: week52Low, basis: '52أسبوع أدنى' });
+    if (w52Range > 0) {
+      const target80 = close - w52Range * w52Pos * 0.8;
+      if (target80 < tp2 - minTPDist) tp3Candidates.push({ price: target80, basis: '80% نطاق 52أ' });
+    }
+    const atrTP3 = close - safeAtr * 5 * atrMul;
+    tp3Candidates.push({ price: atrTP3, basis: `${round2(5 * atrMul)}× ATR` });
+    tp3Candidates.sort((a, b) => b.price - a.price);
+    let tp3 = atrTP3;
+    for (const c of tp3Candidates) {
+      if (c.price < tp2 - minTPDist) { tp3 = c.price; break; }
+    }
+    const tp3Basis = tp3Candidates.find(c => Math.abs(c.price - tp3) < 0.01)?.basis || `${round2(5 * atrMul)}× ATR`;
+    tps.push({ level: 3, price: round2(tp3), basis: tp3Basis, probability: 'Low' });
+
+  } else {
+    // Hold signals: generate 3 directional TPs based on trend bias
+    const trendUp = (sma50 > 0 && close > sma50) || (sma200 > 0 && close > sma200);
     const dir = trendUp ? 1 : -1;
     tps.push({ level: 1, price: round2(close + dir * safeAtr * 1.5 * atrMul), basis: `${round2(1.5 * atrMul)}× ATR (trend)`, probability: 'Medium' });
+    tps.push({ level: 2, price: round2(close + dir * safeAtr * 3 * atrMul), basis: `${round2(3 * atrMul)}× ATR (trend)`, probability: 'Low' });
+    tps.push({ level: 3, price: round2(close + dir * safeAtr * 5 * atrMul), basis: `${round2(5 * atrMul)}× ATR (trend)`, probability: 'Low' });
   }
 
   return tps;

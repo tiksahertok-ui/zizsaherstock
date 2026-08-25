@@ -27,4 +27,5 @@ node_modules/
 
 # Directories
 zizsaherstock/
-```
+```.next/
+tool-results/
