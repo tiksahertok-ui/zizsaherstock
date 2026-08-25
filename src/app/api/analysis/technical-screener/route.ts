@@ -28,7 +28,7 @@ import {
 
 // Simple in-memory cache keyed by params
 let cachedResult: { data: string; ts: number; key: string } | null = null;
-const CACHE_TTL = 120_000; // 2 minutes
+const CACHE_TTL = 300_000; // 5 minutes — aligned with data source cache
 
 function cacheKey(params: Record<string, string>): string {
   return Object.entries(params).filter(([k,v]) => v).sort().map(([k,v]) => `${k}=${v}`).join('&');
@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
     const ck = cacheKey({ sector: sector || '', signal: signal || '', sort, limit: String(limit), timeframe, minConfidence: String(minConfidence || '') });
     if (cachedResult && Date.now() - cachedResult.ts < CACHE_TTL && cachedResult.key === ck) {
       return new NextResponse(cachedResult.data, {
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=120, stale-while-revalidate=30', 'X-Cache': 'HIT' },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300, stale-while-revalidate=60', 'X-Cache': 'HIT' },
       });
     }
 
@@ -174,7 +174,7 @@ export async function GET(request: NextRequest) {
         headers: {
           'Content-Type': 'text/csv; charset=utf-8',
           'Content-Disposition': `attachment; filename="egx_screener_${timeframe}_${new Date().toISOString().slice(0, 10)}.csv"`,
-          'Cache-Control': 'public, max-age=120, stale-while-revalidate=30',
+          'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
         },
       });
     }
@@ -191,7 +191,7 @@ export async function GET(request: NextRequest) {
     });
     cachedResult = { data: responseData, ts: Date.now(), key: ck };
     return new NextResponse(responseData, {
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=120, stale-while-revalidate=30', 'X-Cache': 'MISS' },
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300, stale-while-revalidate=60', 'X-Cache': 'MISS' },
     });
   } catch (error) {
     const elapsed = Date.now() - startTime;

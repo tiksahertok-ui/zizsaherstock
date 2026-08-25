@@ -139,7 +139,7 @@ const fullCache = new Map<string, { data: Record<string, QuoteData>; ts: number 
 const FULL_CACHE_TTL = 60_000; // 60 seconds
 
 // ── Batch settings ─────────────────────────────────────────────
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 50;
 const FETCH_TIMEOUT = 8_000;
 
 /**
@@ -221,12 +221,10 @@ async function fetchFromTV(
         return batchResult;
       };
 
-      const batchResults: Record<string, QuoteData>[] = [];
-      for (let i = 0; i < batches.length; i++) {
-        if (i > 0) await new Promise(r => setTimeout(r, 150));
-        const batchResult = await fetchSingleBatch(batches[i]);
-        batchResults.push(batchResult);
-      }
+      // Fetch batches in parallel (TradingView handles concurrent requests well)
+      const batchResults: Record<string, QuoteData>[] = await Promise.all(
+        batches.map(batch => fetchSingleBatch(batch))
+      );
 
       // Merge results from all successful batches
       for (const res of batchResults) {
@@ -410,12 +408,10 @@ export async function fetchPerformance(
     return batchResult;
   };
 
-  const batchResults: Record<string, PerformanceData>[] = [];
-  for (let i = 0; i < batches.length; i++) {
-    if (i > 0) await new Promise(r => setTimeout(r, 150));
-    const batchResult = await fetchSingleBatch(batches[i]);
-    batchResults.push(batchResult);
-  }
+  // Fetch batches in parallel
+  const batchResults: Record<string, PerformanceData>[] = await Promise.all(
+    batches.map(batch => fetchSingleBatch(batch))
+  );
 
   for (const res of batchResults) {
     Object.assign(result, res);
@@ -464,7 +460,7 @@ export interface TechnicalIndicators {
 }
 
 const techCache = new Map<string, { data: Record<string, TechnicalIndicators>; ts: number }>();
-const TECH_CACHE_TTL = 60_000; // 60 seconds
+const TECH_CACHE_TTL = 300_000; // 5 minutes — EGX data doesn't change intra-session
 
 /**
  * Fetch professional technical indicators from TradingView scanner.
@@ -557,12 +553,10 @@ export async function fetchTechnicalIndicators(
     return batchResult;
   };
 
-  const batchResults: Record<string, TechnicalIndicators>[] = [];
-  for (let i = 0; i < batches.length; i++) {
-    if (i > 0) await new Promise(r => setTimeout(r, 150));
-    const batchResult = await fetchSingleBatch(batches[i]);
-    batchResults.push(batchResult);
-  }
+  // Fetch batches in parallel (TradingView handles concurrent requests well)
+  const batchResults: Record<string, TechnicalIndicators>[] = await Promise.all(
+    batches.map(batch => fetchSingleBatch(batch))
+  );
 
   for (const res of batchResults) {
     Object.assign(result, res);
