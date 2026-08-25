@@ -58,6 +58,13 @@ export interface TakeProfitTarget {
   probability: 'High' | 'Medium' | 'Low';
 }
 
+export interface EntryPriceDetail {
+  price: number;
+  strategy: string;    // strategy name in Arabic
+  basis: string;        // specific level used (e.g. 'EMA20', 'SMA50')
+  discount: number;     // % discount from close (positive = entry below close)
+}
+
 export interface ScreenerStock {
   symbol: string;
   name: string;
@@ -65,6 +72,7 @@ export interface ScreenerStock {
   signal: SignalType;
   confidence: number;
   entryPrice: number;
+  entryDetail: EntryPriceDetail;
   stopLoss: number;
   stopLossPct: number;
   takeProfits: TakeProfitTarget[];
@@ -604,6 +612,261 @@ function nextRoundBelow(price: number): number {
   return nearestPsychLevel(price, -1);
 }
 
+/**
+ * calcEntryPrice — Smart entry price using best-fit strategy per stock.
+ * 
+ * Instead of using close price as entry, this selects the optimal entry zone
+ * based on the stock's technical picture. For BUY signals, the entry is BELOW
+ * the close (buy the pullback). For SELL signals, entry is ABOVE close.
+ * 
+ * Strategies evaluated (in priority order):
+ *   1. Pullback to EMA20   — Price above EMA20, enter at EMA20 pullback zone
+ *   2. Pullback to SMA20   — When EMA20 not available or too far
+ *   3. BB Middle Touch      — Price extended above BB middle, enter at SMA20
+ *   4. Support Bounce       — Enter near key support (SMA50 / prev low / psych)
+ *   5. ATR Pullback        — Default: close minus 0.5×ATR (wait for small dip)
+ *   6. Immediate (Market)   — Used when pullback would be too deep or signal is urgent
+ */
+function calcEntryPrice(
+  t: TechnicalIndicators,
+  signal: SignalType,
+  sl: { price: number; pct: number },
+  tf: Timeframe
+): EntryPriceDetail {
+  const { close, atr, sma20, sma50, sma200, ema20,
+          bbUpper, bbLower, high, low } = t;
+  const atrMul = TF_ADJUST[tf].atrMultiplier;
+  const safeAtr = atr > 0 ? atr : close * 0.02;
+  const isBull = signal === 'Strong Buy' || signal === 'Buy';
+  const isBear = signal === 'Strong Sell' || signal === 'Sell';
+
+  // Maximum acceptable discount from close (don't go too far from market)
+  const maxDiscount = close * 0.03; // 3% max pullback wait
+  // Minimum discount to be meaningful (avoid noise-level entries)
+  const minDiscount = close * 0.002; // 0.2% minimum
+  // Entry must be between SL and close (for buy) or between close and SL (for sell)
+  const slBuffer = close * 0.003; // keep 0.3% away from SL
+
+  if (isBull) {
+    // ── BULL ENTRY STRATEGIES ──
+    // We want to enter BELOW close but ABOVE stop-loss
+    const safeSL = sl.price + slBuffer; // don't enter too close to SL
+    const candidates: { price: number; strategy: string; basis: string; rank: number }[] = [];
+
+    // Strategy 1: Pullback to EMA20 (best for trending stocks)
+    if (ema20 > 0 && ema20 < close) {
+      const dist = close - ema20;
+      const discPct = (dist / close) * 100;
+      if (ema20 >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
+        // Check if price is in an uptrend relative to EMA20
+        const trendStrength = sma50 > 0 && ema20 > sma50; // EMA20 above SMA50 = strong trend
+        candidates.push({
+          price: ema20,
+          strategy: 'ارتداد لمتوسط EMA20',
+          basis: `EMA20 @ ${round2(ema20)}`,
+          rank: trendStrength ? 1 : 3,
+        });
+      }
+    }
+
+    // Strategy 2: Pullback to SMA20
+    if (sma20 > 0 && sma20 < close) {
+      const dist = close - sma20;
+      if (sma20 >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
+        const isEMA20Far = ema20 <= 0 || (close - ema20) > maxDiscount;
+        candidates.push({
+          price: sma20,
+          strategy: 'ارتداد لمتوسط SMA20',
+          basis: `SMA20 @ ${round2(sma20)}`,
+          rank: isEMA20Far ? 1 : 4,
+        });
+      }
+    }
+
+    // Strategy 3: Bollinger Band Middle reversion
+    // When price is extended (near BB upper), enter at the middle band (SMA20)
+    if (bbUpper > 0 && bbLower > 0) {
+      const bbMid = (bbUpper + bbLower) / 2;
+      const bbPos = (close - bbLower) / (bbUpper - bbLower); // 0=lower, 1=upper
+      if (bbPos > 0.7 && bbMid > 0 && bbMid < close && bbMid >= safeSL) {
+        const dist = close - bbMid;
+        if (dist <= maxDiscount && dist >= minDiscount) {
+          candidates.push({
+            price: bbMid,
+            strategy: 'ارتداد لوسط البولينجر',
+            basis: `BB Middle @ ${round2(bbMid)}`,
+            rank: 2,
+          });
+        }
+      }
+    }
+
+    // Strategy 4: Support bounce at SMA50
+    if (sma50 > 0 && sma50 < close) {
+      const dist = close - sma50;
+      if (sma50 >= safeSL && dist <= maxDiscount) {
+        // Good when price recently bounced off SMA50
+        const nearSMA50 = dist < safeAtr * 1.5;
+        candidates.push({
+          price: sma50,
+          strategy: 'دعم SMA50',
+          basis: `SMA50 @ ${round2(sma50)}`,
+          rank: nearSMA50 ? 2 : 5,
+        });
+      }
+    }
+
+    // Strategy 5: Previous day low bounce
+    if (low > 0 && low < close) {
+      const dist = close - low;
+      if (low >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
+        candidates.push({
+          price: low,
+          strategy: 'ارتداد لأدنى الجلسة',
+          basis: `أدنى سابق @ ${round2(low)}`,
+          rank: 6,
+        });
+      }
+    }
+
+    // Strategy 6: Psychological level bounce
+    const psychBelow = nextRoundBelow(close);
+    if (psychBelow > 0 && psychBelow < close) {
+      const dist = close - psychBelow;
+      if (psychBelow >= safeSL && dist <= maxDiscount && dist >= minDiscount) {
+        candidates.push({
+          price: psychBelow,
+          strategy: 'مستوى نفسي',
+          basis: `مستوى ${round2(psychBelow)}`,
+          rank: 7,
+        });
+      }
+    }
+
+    // Strategy 7: ATR Pullback (default — always available)
+    const atrEntry = close - safeAtr * 0.5 * atrMul;
+    if (atrEntry >= safeSL) {
+      candidates.push({
+        price: atrEntry,
+        strategy: 'سحب جزئي (ATR)',
+        basis: `0.5× ATR @ ${round2(atrEntry)}`,
+        rank: 8,
+      });
+    }
+
+    // Sort by rank (lower = better), pick best
+    candidates.sort((a, b) => a.rank - b.rank);
+
+    if (candidates.length > 0) {
+      const chosen = candidates[0];
+      const finalPrice = clamp(chosen.price, safeSL, close - minDiscount);
+      const discount = round2(((close - finalPrice) / close) * 100);
+      return {
+        price: round2(finalPrice),
+        strategy: chosen.strategy,
+        basis: chosen.basis,
+        discount,
+      };
+    }
+
+    // Fallback: immediate entry at close (no meaningful pullback zone)
+    return {
+      price: round2(close),
+      strategy: 'شراء فوري',
+      basis: 'سعر السوق الحالي',
+      discount: 0,
+    };
+
+  } else if (isBear) {
+    // ── BEAR ENTRY STRATEGIES (short) ──
+    const safeSL = sl.price - slBuffer;
+    const candidates: { price: number; strategy: string; basis: string; rank: number }[] = [];
+
+    // Pullback to EMA20 (from below)
+    if (ema20 > 0 && ema20 > close) {
+      const dist = ema20 - close;
+      if (ema20 <= safeSL && dist <= maxDiscount && dist >= minDiscount) {
+        candidates.push({
+          price: ema20,
+          strategy: 'ارتداد لمتوسط EMA20',
+          basis: `EMA20 @ ${round2(ema20)}`,
+          rank: 1,
+        });
+      }
+    }
+
+    // Pullback to SMA20
+    if (sma20 > 0 && sma20 > close) {
+      const dist = sma20 - close;
+      if (sma20 <= safeSL && dist <= maxDiscount && dist >= minDiscount) {
+        candidates.push({
+          price: sma20,
+          strategy: 'ارتداد لمتوسط SMA20',
+          basis: `SMA20 @ ${round2(sma20)}`,
+          rank: 2,
+        });
+      }
+    }
+
+    // BB Middle (price extended below)
+    if (bbUpper > 0 && bbLower > 0) {
+      const bbMid = (bbUpper + bbLower) / 2;
+      const bbPos = (close - bbLower) / (bbUpper - bbLower);
+      if (bbPos < 0.3 && bbMid > close && bbMid <= safeSL) {
+        const dist = bbMid - close;
+        if (dist <= maxDiscount && dist >= minDiscount) {
+          candidates.push({
+            price: bbMid,
+            strategy: 'ارتداد لوسط البولينجر',
+            basis: `BB Middle @ ${round2(bbMid)}`,
+            rank: 2,
+          });
+        }
+      }
+    }
+
+    // ATR pullback up
+    const atrEntry = close + safeAtr * 0.5 * atrMul;
+    if (atrEntry <= safeSL) {
+      candidates.push({
+        price: atrEntry,
+        strategy: 'سحب جزئي (ATR)',
+        basis: `0.5× ATR @ ${round2(atrEntry)}`,
+        rank: 8,
+      });
+    }
+
+    candidates.sort((a, b) => a.rank - b.rank);
+    if (candidates.length > 0) {
+      const chosen = candidates[0];
+      const finalPrice = clamp(chosen.price, close + minDiscount, safeSL);
+      const discount = round2(((finalPrice - close) / close) * 100);
+      return {
+        price: round2(finalPrice),
+        strategy: chosen.strategy,
+        basis: chosen.basis,
+        discount,
+      };
+    }
+
+    return {
+      price: round2(close),
+      strategy: 'بيع فوري',
+      basis: 'سعر السوق الحالي',
+      discount: 0,
+    };
+
+  }
+
+  // Hold: use close as entry
+  return {
+    price: round2(close),
+    strategy: 'سعر السوق',
+    basis: 'سعر الإغلاق',
+    discount: 0,
+  };
+}
+
 function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe): { price: number; pct: number } {
   const { close, atr, sma20, sma50, sma100, sma200, bbLower, bbUpper, high, low } = t;
   const atrMul = TF_ADJUST[tf].atrMultiplier;
@@ -895,11 +1158,12 @@ export async function runTechnicalScreener(
 
     if (confidence < p.minConfidence) { skippedConfidence++; continue; }
 
-    // SL, TP, R:R
+    // SL, TP, Entry, R:R
     const sl = calcStopLoss(t, signal, p.timeframe);
+    const entry = calcEntryPrice(t, signal, sl, p.timeframe);
     const tps = calcTakeProfits(t, signal, p.timeframe);
-    const risk = Math.abs(t.close - sl.price);
-    const reward = tps.length > 0 ? Math.abs(tps[0].price - t.close) : 0;
+    const risk = Math.abs(entry.price - sl.price);
+    const reward = tps.length > 0 ? Math.abs(tps[0].price - entry.price) : 0;
     const riskReward = risk > 0 && reward > 0 ? round2(reward / risk) : 0;
     const positionSize = calcPositionSize(sl.pct, p, confidence);
     const riskFlags = getRiskFlags(t, signal, t.volume, dq);
@@ -919,7 +1183,7 @@ export async function runTechnicalScreener(
 
     stocks.push({
       symbol: stock.symbol, name: stock.name, sector: stock.sector,
-      signal, confidence, entryPrice: t.close,
+      signal, confidence, entryPrice: entry.price, entryDetail: entry,
       stopLoss: sl.price, stopLossPct: sl.pct,
       takeProfits: tps, riskReward, positionSize,
       rationale: allRationales, tags,
