@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 import type { StockOption } from '@/types';
+import { fmtCurrency } from '@/utils/formatters';
 
 interface AddHoldingDialogProps {
   open: boolean;
@@ -110,7 +111,7 @@ export function AddHoldingDialog({
                         </div>
                         <div className="flex items-center gap-2">
                           {stock.currentPrice && (
-                            <span className="font-semibold">{stock.currentPrice}</span>
+                            <span className="font-semibold text-xs">{fmtCurrency(stock.currentPrice)}</span>
                           )}
                           {selectedStock?.symbol === stock.symbol && (
                             <Check className="w-3.5 h-3.5 text-emerald-600" />

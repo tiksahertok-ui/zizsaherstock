@@ -646,7 +646,7 @@ export default function StockScreener({ defaultSector }: ScreenerProps) {
                     <TableHead className="hidden sm:table-cell">Sector</TableHead>
                     <TableHead className="text-right">
                       <button onClick={() => handleSortToggle('pe')} className="flex items-center gap-1 ml-auto hover:text-foreground">
-                        Price <SortIcon field="pe" />
+                        آخر إغلاق <SortIcon field="pe" />
                       </button>
                     </TableHead>
                     <TableHead className="text-right hidden sm:table-cell">Fair Value</TableHead>

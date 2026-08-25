@@ -150,6 +150,7 @@ export default function WatchlistPanel({ symbols }: WatchlistPanelProps) {
                 {/* Price */}
                 <div className="text-right">
                   <p className="text-sm font-mono font-semibold tabular-nums">{fmtCurrency(stock.price)}</p>
+                  <p className="text-[9px] text-muted-foreground font-medium">آخر إغلاق</p>
                   {stock.fairValue > 0 && (
                     <p className={`text-[11px] font-mono tabular-nums ${pnlColor(stock.upside)}`}>
                       {fmtPercent(stock.upside)}

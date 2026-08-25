@@ -99,7 +99,7 @@ export function HoldingsTable({
               </TableHead>
               <TableHead className="text-xs hidden md:table-cell">Shares</TableHead>
               <TableHead className="text-xs">Avg Cost</TableHead>
-              <TableHead className="text-xs">Current</TableHead>
+              <TableHead className="text-xs">آخر إغلاق</TableHead>
               <TableHead className="text-xs">
                 <SortableHeader label="Market Value" field="marketValue" sortField={sortField} sortDir={sortDir} onToggleSort={toggleSort} />
               </TableHead>

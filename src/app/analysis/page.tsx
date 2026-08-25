@@ -332,7 +332,7 @@ export default function ScreenerPage() {
     const isBear = s.signal.includes('Sell');
 
     // All price levels for range calculation
-    const allPrices = [sl, entry, ...tps.map(tp => tp.price)].filter(p => p > 0);
+    const allPrices = [sl, entry, s.indicators.close, ...tps.map(tp => tp.price)].filter(p => p > 0);
     const minP = Math.min(...allPrices);
     const maxP = Math.max(...allPrices);
     const range = maxP - minP || 1;
@@ -371,6 +371,10 @@ export default function ScreenerPage() {
               <div className={"absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full z-20 border-[1.5px] border-background shadow-sm " + (tp.probability === 'High' ? 'bg-emerald-400 shadow-emerald-500/30' : tp.probability === 'Medium' ? 'bg-amber-400 shadow-amber-500/30' : 'bg-slate-400')} style={{ left: `calc(${pos(tp.price)}% - 4px)` }} />
             </TooltipTrigger><TooltipContent side="bottom" className="text-[10px]"><span className="text-emerald-500 font-semibold">مستهدف {tp.level}</span> {tp.price.toFixed(2)} <span className="text-muted-foreground">(+{((tp.price - entry) / entry * 100).toFixed(1)}%)</span></TooltipContent></Tooltip></TooltipProvider>
           ))}
+          {/* Current price marker */}
+          <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild>
+            <div className="absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full z-10 bg-foreground/50 border-[1.5px] border-background" style={{ left: `calc(${pos(s.indicators.close)}% - 4px)` }} />
+          </TooltipTrigger><TooltipContent side="top" className="text-[10px]"><span className="font-semibold">آخر إغلاق</span> {s.indicators.close.toFixed(2)}</TooltipContent></Tooltip></TooltipProvider>
         </div>
       );
     }
@@ -399,6 +403,8 @@ export default function ScreenerPage() {
             {tps.map(tp => (
               <div key={tp.level} className={"absolute inset-y-0 w-px z-10 " + (tp.probability === 'High' ? 'bg-emerald-500/60' : tp.probability === 'Medium' ? 'bg-amber-500/40' : 'bg-slate-400/30')} style={{ left: pos(tp.price) + '%' }} />
             ))}
+            {/* Current price vertical marker */}
+            <div className="absolute inset-y-0 w-px bg-foreground/30 z-10" style={{ left: pos(s.indicators.close) + '%' }} />
             {/* Quarter grid lines */}
             {[0.25, 0.5, 0.75].map(p => <div key={p} className="absolute inset-y-0 w-px bg-border/15" style={{ left: (p * 100) + '%' }} />)}
           </div>
@@ -417,6 +423,13 @@ export default function ScreenerPage() {
               <div className="flex flex-col items-center">
                 <span className="text-[9px] font-bold text-blue-600 dark:text-blue-400 bg-blue-500/10 border border-blue-500/25 px-1.5 py-0.5 rounded-md whitespace-nowrap shadow-sm ring-1 ring-blue-500/10">{entry.toFixed(2)}</span>
                 <span className="w-px h-1.5 bg-blue-500/60" />
+              </div>
+            </div>
+            {/* Current price label */}
+            <div className="absolute bottom-0 z-30 pointer-events-auto" style={{ left: pos(s.indicators.close) + '%', transform: 'translateX(-50%)' }}>
+              <div className="flex flex-col-reverse items-center">
+                <span className="text-[8px] font-semibold text-foreground/70 bg-muted/80 border border-border/40 px-1 py-0.5 rounded whitespace-nowrap">آخر إغلاق {s.indicators.close.toFixed(2)}</span>
+                <span className="w-px h-1.5 bg-foreground/30" />
               </div>
             </div>
             {/* TP labels — alternate top/bottom to avoid overlap */}
@@ -661,7 +674,7 @@ export default function ScreenerPage() {
                               </div>
                               <div className="flex items-center gap-2 mt-0.5">
                                 <p className="text-[9px] text-muted-foreground truncate">{s.name}</p>
-                                <span className="text-[9px] font-mono font-medium text-muted-foreground/70">{s.indicators.close.toFixed(2)} ج.م</span>
+                                <span className="text-[9px] font-mono font-semibold text-foreground/80 bg-muted/60 px-1 py-0 rounded">{s.indicators.close.toFixed(2)} ج.م</span>
                               </div>
                             </div>
                             <div className="flex flex-col items-center gap-1">
@@ -944,13 +957,13 @@ export default function ScreenerPage() {
                                   <span className={"text-[9px] font-bold px-1 py-0 rounded " + dqColor + ' bg-muted/50'}>{s.dataQuality.grade}</span>
                                 </div>
                                 <div className="text-[10px] text-muted-foreground truncate max-w-[120px] hidden lg:block">{s.name.length > 30 ? s.name.slice(0, 30) + '...' : s.name}</div>
+                                <div className="text-[10px] font-mono font-semibold text-foreground/80 mt-0.5">آخر إغلاق: {s.indicators.close.toFixed(2)} ج.م</div>
                               </div>
                             </div>
                           </td>
                           <td className="px-3 py-3"><SignalBadge signal={s.signal} /></td>
                           <td className="text-right px-3 py-3">
                             <div className="font-mono text-xs font-medium">{s.entryPrice.toFixed(2)}</div>
-                            <div className="font-mono text-[9px] text-muted-foreground/50">السعر: {s.indicators.close.toFixed(2)}</div>
                             {s.entryDetail?.discount > 0.1 && (
                               <div className="text-[8px] text-amber-600/70 mt-0.5">{s.entryDetail.strategy} -{s.entryDetail.discount.toFixed(1)}%</div>
                             )}
@@ -1164,7 +1177,7 @@ export default function ScreenerPage() {
                         <SignalBadge signal={s.signal} />
                       </div>
                       <p className="text-[10px] text-muted-foreground truncate max-w-[160px]">{s.name}</p>
-                      <div className="text-[10px] font-mono text-muted-foreground/60">آخر سعر: {s.indicators.close.toFixed(2)} ج.م</div>
+                      <div className="text-[10px] font-mono font-semibold text-foreground/80 bg-muted/60 px-1.5 py-0 rounded">آخر إغلاق: {s.indicators.close.toFixed(2)} ج.م</div>
                     </div>
                     <ConfidenceRing value={s.confidence} size={36} />
                   </div>
