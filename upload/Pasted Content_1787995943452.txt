@@ -1,0 +1,197 @@
+# EGX Technical-Analysis Model — Quantitative Audit Report
+
+**Repository:** `tiksahertok-ui/zizsaherstock`
+**Component reviewed:** `src/lib/technical-screener.ts` (EGX Technical Screener Engine v2), its data layer (`src/lib/market-data.ts`), and the API surface that exposes it (`src/app/api/analysis/technical-screener/route.ts`)
+**Reviewer stance:** senior quant / systematic-trading validation review
+**Scope note:** this repo does not contain a separate "backtesting framework" module — the signal engine and its self-contained `backtestSignals()` function are the entire technical-analysis stack. All findings below are anchored to that reality rather than to a hypothetical larger system.
+
+---
+
+## Executive Summary
+
+The screener is a well-structured, defensively-coded **rule-based signal generator** — good input guards, good unit-test coverage of arithmetic edge cases, sensible EGX-specific touches (penny-stock floor, liquidity filter, Arabic-language entry strategy labels). It is **not**, however, a validated trading model in the quantitative-finance sense. There is currently **no historical price database, no point-in-time signal reconstruction, and no true out-of-sample test** anywhere in the codebase. The one function named `backtestSignals()` does not measure predictive skill — it is structurally guaranteed to look good almost regardless of whether the signals have any edge (Finding P0-1). This is the single most important issue in the review: every win-rate, Sharpe ratio, or expectancy number this system has ever produced should be treated as **uninformative**, not merely "needs more data."
+
+Below, findings are graded:
+- **P0 — Invalidates results.** Must fix before any number from this system is trusted or acted on.
+- **P1 — High.** Materially distorts signals, risk, or conclusions; fix before live use.
+- **P2 — Medium.** Real gap, bounded impact; fix before scaling capital or universe.
+- **P3 — Low.** Hygiene, documentation, or robustness polish.
+
+| # | Finding | Severity |
+|---|---|---|
+| 1 | "Backtest" compares live price to an entry price computed from the *same* snapshot → self-referential, near-tautological win rate | **P0** |
+| 2 | Real forward-return data (`fetchPerformance`, 1W/1M/3M/6M) is fetched but discarded — never used in the accuracy calculation it should drive | **P0** |
+| 3 | No historical OHLCV/indicator storage exists at all — a genuine walk-forward or point-in-time backtest is architecturally impossible today | **P0** |
+| 4 | Scoring weights, thresholds, and confidence formula are hand-picked constants with no statistical fitting or out-of-sample calibration | **P1** |
+| 5 | Single, undocumented data source (public TradingView scanner endpoint) with no fallback, no SLA, and unclear adjustment methodology | **P1** |
+| 6 | No portfolio-level risk control: `maxPortfolioExposure` is declared but never read anywhere in the code; no correlation/sector-concentration cap | **P1** |
+| 7 | Static, hardcoded 260-symbol universe (dated "June 2026") with no delisting/membership history → structural survivorship bias in any future historical study | **P1** |
+| 8 | Sell/Strong Sell signals imply short-selling mechanics that are not realistically available to most EGX participants | **P1** |
+| 9 | Module docstring's stated factor weights (Trend 30/Momentum 25/**Vol 20**/**Volume 15**/Consensus 10) don't match the actual code weights (Vol **15**/Volume **10**/undocumented **Trend-Strength 10**/Consensus 10) | **P2** |
+| 10 | EGX daily price-limit assumed at 5% in stop-loss/take-profit bounding logic; historical sourcing suggests EGX's regular-session limit has been higher (and has changed over time) | **P2** |
+| 11 | Confidence score (0–100%) is a heuristic blend of score magnitude and internal rationale agreement, never calibrated against realized outcomes | **P2** |
+| 12 | No multicollinearity treatment across indicator families (SMA/EMA stacks, RSI/Stochastic, BB position/52-week range all encode overlapping "trend" and "mean-reversion" information) | **P2** |
+| 13 | No transaction-cost, slippage, or spread modeling anywhere in signal or backtest logic | **P1** |
+| 14 | Position sizing is per-trade only (`calcPositionSize`), with no aggregate exposure, no correlation-adjusted sizing, no volatility targeting across the book | **P2** |
+
+---
+
+## 1. Data Integrity
+
+### 1.1 Data source and architecture
+All price, volume, and indicator values are pulled live from TradingView's public (undocumented, unauthenticated) scanner endpoint (`https://scanner.tradingview.com/global/scan`, `src/lib/market-data.ts:16-243`). The comment on `technical-screener.ts:9` is explicit that indicators are "all from TradingView scanner — no local calculation." That's a reasonable engineering shortcut for a dashboard, but it has real audit consequences:
+
+- **Single point of failure, no fallback.** If TradingView changes its scanner response shape, rate-limits the IP, or deprecates the endpoint, every signal in the system silently degrades (the code does detect `dataRatio < 0.77` and returns a 503 below 10 stocks — decent defensive coding — but there is no secondary source to fail over to).
+- **Unclear adjustment methodology.** There is no code anywhere that adjusts historical prices for splits, rights issues, or cash/stock dividends (`grep` for split/dividend/corporate action across `src/lib` turns up only fundamental-analysis dividend-yield *sanity bounds*, not price-series adjustment logic). Whatever TradingView does server-side is opaque and unverified. If a technical indicator (e.g., SMA200) straddles a corporate action, an unadjusted series produces a phantom gap that the trend/momentum scorers will read as a real breakout or breakdown.
+- **Terms-of-service exposure.** The scanner endpoint is TradingView's internal API, not a published/licensed data feed. This is a business-continuity and compliance risk independent of the modeling issues, worth flagging even though it's outside pure quant scope.
+- **Source inconsistency across the app.** Fundamental data elsewhere in the repo comes from `stockanalysis.com` JSON dumps and other providers (`download/egx_stockanalysis.json`, `download/egx_from_stockanalysis.json`) while technical data comes from TradingView. Nothing cross-validates that both sources agree on split-adjusted price history for the same symbol on the same day — a latent source-of-truth conflict if the two are ever compared or blended.
+
+### 1.2 No historical data → no data cleaning to audit
+There is no ingestion pipeline, no stored time series, and no cleaning/imputation logic for historical bars — because there's no historical store at all. `fetchTechnicalIndicators` returns only the *current* snapshot (5-minute cache, `TECH_CACHE_TTL = 300_000`, `market-data.ts:463`). This means:
+- **Look-ahead bias is not a risk you can introduce today, because there is no historical replay** — but that also means it's currently **impossible to prove the system doesn't have it**, since nothing is reconstructed point-in-time. The moment you build the historical database this report recommends (§3), look-ahead bias becomes a live risk that must be tested for explicitly (indicators must be computed only from data available as-of each simulated decision date).
+- **Survivorship bias is baked into the universe definition, not the data feed.** `EGX_STOCKS` (`src/lib/egx-stocks.ts`) is a flat, hardcoded array "Last updated: June 2026." A stock that gets delisted, suspended, or merged simply disappears from future runs of the screener with no record that it ever existed or how it exited. Any historical study built later against "the current 260-symbol list" will silently exclude EGX's delisted/failed companies and overstate historical performance. Fix direction: track membership with effective date ranges (`symbol, sector, listed_from, delisted_to, delisting_reason`), and any backtest must use the point-in-time universe, not today's list.
+
+### 1.3 Data quality scoring — good idea, arbitrary calibration
+`assessDataQuality()` (`technical-screener.ts:208-246`) is a genuinely good feature: it flags missing indicators, RSI/ATR extremes, degenerate Bollinger Bands, and anomalous dollar-volume, then produces a 0–100 score and letter grade. Two issues:
+- The point deductions (`-10` per missing indicator, `-5` per anomaly, `technical-screener.ts:239`) are arbitrary and untested against how much they actually predict signal reliability. Treat this as a heuristic sanity filter, not a statistically meaningful score, until validated.
+- `t.rsi <= 0` is used both as "missing RSI" (line 213) and implicitly assumes RSI is never legitimately reported as exactly 0 by the data source — reasonable in practice (RSI≈0 is vanishingly rare) but worth a comment noting it's a proxy for "missing," not a true zero.
+
+---
+
+## 2. Feature Engineering
+
+### 2.1 What's implemented
+Trend (SMA/EMA 20/50/100/200, MA-stack alignment, EMA-crossover proximity), Momentum (RSI-14, MACD-12/26/9, Stochastic-14/3/3), Volatility (Bollinger 20/2, ATR-14, 52-week range position), Volume (30-day average comparison), and TradingView's own aggregated `Recommend.All` rating. This is a sensible, standard indicator set — no complaints about *which* indicators were chosen.
+
+### 2.2 Parameter choices are untested defaults, not fitted values
+RSI(14), MACD(12,26,9), Stochastic(14,3,3), BB(20,2), ATR(14) are the textbook default lookbacks — fine as a starting point, but nothing in the repo shows they were tested against EGX-specific price dynamics (EGX has materially different liquidity, volatility, and microstructure than the US/EU markets these defaults were popularized on). Recommendation: before trusting these parameters, run a sensitivity sweep (e.g., RSI 7/14/21, MACD variants, ATR 10/14/20) against realized forward returns per §5, and check whether EGX's thinner order books favor longer lookbacks that are less prone to single-print noise.
+
+### 2.3 Multicollinearity is not addressed anywhere
+The six scoring components are not independent:
+- SMA20/50/100/200 and EMA20/50/100/200 are highly correlated by construction (both are trend proxies over similar windows); the trend score effectively double-counts the same signal (price above SMA20 *and* SMA50 *and* SMA200, *and* EMA20>EMA50>EMA200 "bull stack," `technical-screener.ts:274-294`) — four overlapping expressions of the same underlying "is this stock in an uptrend" fact.
+- RSI, Stochastic, and MACD in the momentum score are three flavors of the same "how extended is the recent move" idea; they'll frequently agree by construction.
+- Bollinger Band position and 52-week range position (both in `scoreVolatility`) also overlap (BB position ≈ a short-window, volatility-scaled version of what 52-week range measures on a long window).
+
+None of this is fatal for a simple weighted rule system, but it does mean:
+1. The stated 30/25/20/15/10 (or actual 30/25/15/10/10/10 — see Finding 9) weighting doesn't map cleanly onto "independent sources of information" — it's really closer to "trend gets counted ~5 different ways and momentum ~3 different ways."
+2. The `agreement` term used in the confidence formula (`agreeingRationales / allRationales.length`, `technical-screener.ts:1272-1275`) will be inflated by this redundancy: five near-duplicate trend rationales agreeing with each other looks like "5 independent confirmations" when it's closer to 1. This directly overstates the reported confidence percentage.
+
+**Recommendation:** run a correlation matrix of the six component scores across the full universe/history once you have historical data (§3), and either (a) orthogonalize via PCA to get genuinely independent factors, or (b) at minimum, cap how many rationale tags from the same indicator family can count toward the "agreement" ratio.
+
+### 2.4 Normalization and timeframe alignment
+- The composite score isn't normalized to a fixed distribution — it's a sum of ad hoc point values (`+15`, `-12`, `+18`, etc.) clamped to [-100, 100] per component. This works as an ordinal ranking device but has no interpretable scale (a composite of "40" carries no calibrated meaning, e.g., "40 = X% expected forward return"). See §4/§5 for how to turn this into something calibratable.
+- Timeframe adjustment (`TF_ADJUST`, `technical-screener.ts:175-179`) scales thresholds down for weekly/monthly (0.80×, 0.65×) and widens ATR multiples (1.5×, 2.0×) — a reasonable design instinct — but the scaling factors are, again, chosen by intuition, not fit to actual weekly/monthly return volatility on EGX names. All indicators are also **always computed on daily bars** ("TradingView scanner always returns daily indicators," `technical-screener.ts:24`) — so "weekly" and "monthly" signals are really *daily indicators with different thresholds*, not indicators computed on resampled weekly/monthly bars. That's an important distinction to disclose to users: it is not multi-timeframe analysis in the sense the label implies.
+
+---
+
+## 3. Backtesting Framework — this is the core issue
+
+### 3.1 The `backtestSignals()` function does not test predictive skill
+
+Trace the actual call path in `src/app/api/analysis/technical-screener/route.ts:140-165`:
+
+1. `runTechnicalScreener()` generates signals from **live, current** technical data. Each signal's `entryPrice` is computed by `calcEntryPrice()` as a small discount/premium off the **current close** (e.g., "enter at 0.5×ATR pullback below today's close" for a Buy).
+2. Immediately afterward, in the same request, `fetchQuotesLive()` is called again to build `currentPrices` for the backtest (line 147) — fetched **seconds** after the data used to build the signals.
+3. `backtestSignals()` then computes `returnPct = (current − entry) / entry` (`technical-screener.ts:1415`) and derives win rate, expectancy, profit factor, and Sharpe from that.
+
+Because `entryPrice` is *constructed* as a discount from the same day's close, and `current` is (seconds later) essentially that same close, **`returnPct` mostly just measures the size of the built-in entry discount, not any forward market movement.** A Buy signal with a 1% ATR-based entry discount will show `returnPct ≈ +1%` and be marked `correct: true` almost by definition — regardless of whether the stock goes on to rise or fall over the next day, week, or month. This is not "not a true walk-forward backtest" (the code comment's own honest self-assessment, `technical-screener.ts:1447` — "not a true max drawdown" — undersells the severity here); it is a metric that is **structurally biased toward showing success**, which is worse than being merely noisy, because a noisy metric can be improved with more data while a structurally biased one cannot.
+
+**Consequence:** every `winRate`, `avgReturn`, `expectancy`, `profitFactor`, and `sharpeRatio` this system has ever reported should be treated as uninformative about whether the signals have real predictive value. This is P0 — it is the most important finding in this report.
+
+### 3.2 The real forward-return data is fetched and then thrown away
+The function *does* fetch genuine period returns via `fetchPerformance()` — actual 1W/1M/3M/6M performance from TradingView's `Perf.W/Perf.1M/Perf.3M/Perf.6M` columns (`market-data.ts:97-104`) — and attaches it to each backtest row as `periodReturn` (`technical-screener.ts:1429`). **But `periodReturn` is never used to compute `correct`, `winRate`, `avgWin/avgLoss`, `expectancy`, `profitFactor`, or `sharpeRatio`.** All of those are computed from the tautological `returnPct` in §3.1 instead. This is an easy, high-value fix relative to its impact: the ingredients for a much more meaningful (if still imperfect) metric already exist in the code and are simply wired to the wrong variable.
+
+Even fixing this wiring only gets you a *forward-return correctness check on today's snapshot* — useful, but still not a real backtest, because:
+- It only ever evaluates **the current day's signals**, once. There's no accumulation of a track record over time, no persisted history of "signal generated on date X, outcome on date X+N."
+- `Perf.1M`/`Perf.3M`/etc. are trailing performance metrics as of *today*, not the forward performance *from the day the signal was generated* — using them as "did this signal work" requires the signal to have been generated on approximately the date the period starts, which the current architecture cannot guarantee or verify.
+
+### 3.3 What a real backtesting framework requires here
+Given there is currently no historical database, building genuine validation means:
+
+1. **Stand up a historical OHLCV + indicator store.** Daily bars (open/high/low/close/volume) for the full point-in-time EGX universe, adjusted for splits/dividends, going back as many years as available (EGX has had multiple structural breaks — 2011, 2016 EGP flotation, 2020 COVID — worth explicitly testing regime sensitivity across these).
+2. **Point-in-time signal reconstruction.** Recompute each day's SMA/EMA/RSI/MACD/etc. using only data available up to and including that day — this is where TradingView's "always live" indicators become a liability; you cannot ask the scanner "what was SMA200 as of March 2023," so this requires either (a) an independent historical-bar source with your own indicator math, or (b) a data vendor with point-in-time indicator history.
+3. **Walk-forward validation, not a single in-sample fit.** Standard structure: rolling or expanding windows — fit/calibrate thresholds on window *N*, test out-of-sample on window *N+1*, roll forward. At minimum: 60–70% in-sample / 30–40% out-of-sample split by time (never randomly shuffled — that reintroduces look-ahead via information leakage across adjacent days), ideally with several walk-forward folds (e.g., 6–12 month train / 1–3 month test, rolled quarterly) so you can see if performance decays or is stable across regimes.
+4. **Realistic execution assumptions:**
+   - **Transaction costs:** EGX brokerage commissions plus the EGX/MCDR clearing & settlement fees, plus the 0.15% capital-gains-adjacent stamp/disposal tax structure that has applied to EGX trades in recent years — confirm current rates with your broker/EGX directly since these are periodically revised, but *some* nonzero cost assumption must be in the backtest; right now there is none.
+   - **Slippage:** EGX names outside the top ~30–50 by turnover are frequently thin (the code's own `minLiquidity: 10_000` shares default, `technical-screener.ts:166`, is itself an acknowledgment of this). A backtest that fills every trade at the signal's exact computed entry price will overstate performance on anything below the most liquid names. Model slippage as a function of the position size relative to that stock's average daily volume, not a flat basis-point assumption.
+   - **Latency:** signals here are generated on closing daily data; if the intended execution is "act at tomorrow's open," the backtest must fill at the *next bar's open*, not the *signal bar's close* (a subtle but common source of look-ahead in daily-bar backtests).
+5. **Persist a real track record.** Store every signal generated (symbol, date, signal type, entry/SL/TP, confidence, full indicator snapshot) in an append-only table, and periodically (e.g., nightly) mark outcomes against subsequently realized prices. This turns "backtest" from a single-snapshot self-check into an actual accumulating live-forward-test record, which is arguably more convincing than a historical backtest for a system this rule-based (less prone to overfitting the test period, because it can't be re-run against itself).
+
+---
+
+## 4. Statistical Validation
+
+None of the following currently exist in the codebase. Recommended additions, roughly in order of how quickly they'd catch a real problem:
+
+- **Deflated Sharpe Ratio / Probability of Backtest Overfitting (PBO).** Because the scoring weights (15/12/18/8/25/12/etc.) look like they were chosen by iterative manual tuning rather than fit-and-validate, there's meaningful risk that whatever backtest performance eventually gets measured has already been implicitly overfit through the process of hand-picking these constants while looking at how EGX names have historically behaved. Bailey & López de Prado's Deflated Sharpe Ratio and the Combinatorially Symmetric Cross-Validation PBO estimate are designed exactly for this "how many implicit trials did I run tuning this" problem.
+- **Purged / embargoed k-fold cross-validation** (not plain k-fold) if you move toward any parameter fitting — plain shuffled k-fold on time series leaks information across adjacent, highly-autocorrelated days; purge the folds and add an embargo period around each test fold boundary.
+- **Bootstrap confidence intervals on the backtest metrics** (block bootstrap, not i.i.d. resampling, to preserve serial correlation in returns) — report win rate and Sharpe with confidence bands, not point estimates. Given EGX's relatively short liquid trading history and the current per-day signal volume (`ScreenerSummary.total` — up to 260 names), sample sizes for any single signal type/sector will often be small enough that point estimates alone are misleading.
+- **Monte Carlo permutation test on the signal labels.** Randomly shuffle which days got Buy vs. Sell vs. Hold labels (preserving the same class frequencies) and rerun the backtest thousands of times to build a null distribution; compare the real system's performance against that null. If real performance isn't clearly outside the null distribution, the composite scoring rules aren't adding information beyond base rates.
+- **Calibration check on the confidence score.** Bucket historical signals by reported confidence (e.g., 50–60%, 60–70%, …), and check whether realized win rate actually increases with bucket, and whether a 70%-confidence bucket really wins ~70% of the time (reliability diagram / Brier score). Right now `confidence` (`technical-screener.ts:1277`) is a plausible-looking heuristic number with zero evidence it's calibrated to anything.
+- **Multiple-hypothesis correction if you evaluate per-sector or per-signal-type performance separately.** Testing "does this work for Financials," "for Materials," "for Buy signals," "for Strong Buy signals" as separate hypotheses without correction (Bonferroni, Benjamini-Hochberg) will produce false positives by chance alone given how many sub-slices exist across 260 names × 5 signal types × ~10 GICS sectors.
+
+---
+
+## 5. Risk and Portfolio Management
+
+### 5.1 Per-trade sizing exists; portfolio-level controls do not
+`calcPositionSize()` (`technical-screener.ts:1187-1192`) sizes each position from `maxRiskPerTrade / stopLossPct`, scaled 0.5×–1.0× by confidence, capped at 20% of the notional book in a single name. That per-trade logic is reasonable in isolation. But:
+- `ScreenerParameters.maxPortfolioExposure` (default 80%, `technical-screener.ts:147,165`) is **declared and never referenced anywhere else in the codebase** — confirmed by a full-repo search. It has no effect. There is no code path that sums position sizes across the currently-generated signal list and checks the aggregate against any cap.
+- There is no correlation-aware sizing. EGX is a market where sector concentration risk is real (e.g., banks and real-estate names often move together on macro/EGP-devaluation news). Two "independent" Strong Buy signals in two different bank stocks are not two independent bets; a naive sum of per-trade sizes will understate true portfolio risk.
+- No sector or single-name concentration limit is enforced at the portfolio level (the `sector` parameter only *filters which stocks are shown*, `technical-screener.ts:1244` — it's a display/query filter, not a risk control).
+- No drawdown-based circuit breaker (e.g., "reduce all position sizes by X% after a Y% portfolio drawdown") exists anywhere.
+
+**Recommendations, in priority order:**
+1. Wire `maxPortfolioExposure` into an actual portfolio construction step that runs on the *set* of signals, not the per-stock function — sum proposed `positionSize` values and scale the whole book down proportionally if the sum exceeds the cap.
+2. Add a sector-concentration cap (e.g., no more than X% of book notional in one GICS sector) computed the same way.
+3. Add a simple pairwise-correlation penalty: if two highly-correlated names (e.g., trailing 90-day return correlation > 0.7) both fire the same-direction signal, treat them as a single position for sizing purposes rather than two full-size independent ones.
+4. Consider volatility targeting at the book level (scale aggregate exposure inversely to realized portfolio volatility) rather than only ATR-based sizing per name.
+
+### 5.2 Stop-loss and take-profit logic
+`calcStopLoss()`/`calcTakeProfits()` (`technical-screener.ts:990-1182`) use a sensible structural-level approach (nearest SMA/BB/prior high-low/round number, bounded by an ATR floor/ceiling and a hardcoded 1.5%–5% band). This is a solid rule design *given* its assumed 5% daily move ceiling — see §6.1 for why that ceiling itself needs re-verification. Two secondary notes:
+- The worklog in this repo (`worklog.md`) documents that this exact logic previously had a "furthest support instead of nearest support" bug that was fixed — the current code (candidate sort ascending by distance, `technical-screener.ts:1017,1044`) looks correct on inspection, and unit tests (`technical-screener.test.ts:234-254`) specifically regression-test "SL is always below/above entry" — good practice, keep this pattern for any future changes to this function.
+- Take-profit probabilities (`'High' | 'Medium' | 'Low'`, `technical-screener.ts:58`) are assigned by which TP tier they are (TP1/TP2/TP3), not by any measured historical hit rate for that tier. Once the historical backtest in §3 exists, replace this with actual empirical hit-rate-by-tier.
+
+---
+
+## 6. Market Specifics (Egyptian Exchange)
+
+- **Price limits / circuit breakers:** the code assumes a flat 5% maximum daily move (`maxDailyMove = close * 0.05`, `technical-screener.ts:996`) as a hard ceiling for stop-loss/take-profit distances. Historical reporting on EGX indicates the exchange has changed its daily price-fluctuation band over time — tightened to a lower band around the 2011 disruption and later eased back toward roughly a 10%-per-session band (with an additional band for pre-trading) as the market normalized — and these bands are also known to be tightened further, security-by-security, during periods of elevated volatility. **Verify the current, security-specific limit directly against EGX's live trading rules before relying on 5% as a hard constant** — if the real limit is materially wider, the SL/TP logic is being needlessly conservative on trending/volatile names; if it's narrower for some securities (e.g., newly-listed names often trade under tighter bands), the logic could be too aggressive for those names specifically.
+- **Short selling:** Sell/Strong Sell signals in this engine carry entry/stop-loss/take-profit levels exactly like Buy signals, implicitly assuming symmetric ability to take short exposure. Public reporting indicates EGX has been in the process of formally launching market-making and short-selling mechanisms only very recently (targeted for early 2026), meaning **retail/most participants historically have not had a practical way to short individual EGX names.** Recommendation: clearly label Sell/Strong Sell output as "reduce/avoid" or "hedge via index products" for users who cannot actually short, and treat any backtest performance attributed to the short side as currently non-actionable for most users until short-selling access is confirmed and priced (borrow cost, availability, margin) for the specific names being signaled.
+- **Settlement cycle:** confirm the current EGX/MCDR settlement cycle directly (this determines how quickly capital from a closed position becomes available for a new one, which matters for the position-sizing/turnover assumptions in any backtest); don't assume a T+2/T+3 convention borrowed from other markets without checking Egypt's current MCDR rules.
+- **Liquidity / tick sizes:** `minLiquidity: 10_000` shares (`technical-screener.ts:166`) and the low-liquidity risk flags (`technical-screener.ts:1196-1197`) show good awareness that much of the 260-name universe is thin. This should extend into the backtest's slippage model (§3.3) — a liquidity filter at signal-generation time doesn't remove the fact that a fill assumption still has to be realistic for whatever names pass the filter.
+- **Currency/macro overlay:** EGX-listed companies' USD-linked costs and periodic EGP devaluation episodes are a dominant driver of sector-wide moves (banks, importers) independent of technical setups. Not something a pure technical model needs to solve, but worth a documented caveat that technical signals here can and will conflict with macro-driven repricing during EGP volatility events.
+
+---
+
+## 7. Code, Reproducibility, and Deployment
+
+**What's already good:**
+- Solid unit-test coverage of the arithmetic/edge cases (465 lines in `technical-screener.test.ts`: RSI boundary values, zero-volume/zero-ATR guards, CSV escaping, SL-always-below/above-entry regression tests, filter behavior). This is real engineering hygiene and should be preserved as the codebase evolves.
+- Defensive coding throughout (`safeDiv`, `clamp`, NaN/Infinity guards, data-quality scoring, degraded-data detection with a 503 response) — appropriate paranoia for a system consuming an unofficial third-party feed.
+- Caching and in-flight request de-duplication (`market-data.ts:125-242`) is a thoughtful piece of engineering for staying within the scanner endpoint's informal rate limits.
+
+**Gaps:**
+- **Documentation/implementation drift.** The module header comment states factor weights as Trend 30% / Momentum 25% / Volatility 20% / Volume 15% / Consensus 10% (`technical-screener.ts:16-20`), but the actual composite (`technical-screener.ts:1255-1261`) uses Trend 0.30 / Momentum 0.25 / **Volatility 0.15** / **Volume 0.10** / an undocumented **Trend-Strength 0.10** / Consensus 0.10. Anyone auditing the model from the docstring alone (as a reviewer initially would) gets the wrong picture, and it suggests the weights were adjusted at some point without updating the comment. Fix: keep these in sync, ideally by generating the docstring table from the actual weight constants rather than hand-maintaining both.
+- **No versioned parameter/config file.** `DEFAULT_PARAMS` and `TF_ADJUST` are hardcoded constants in the same file as the logic. For reproducibility, move tunable parameters (thresholds, weights, ATR multipliers, position-size caps) into a versioned config, and log which config version produced each signal — essential once you start doing walk-forward re-calibration (§3.3), so you can reproduce exactly what a given historical signal set would have looked like.
+- **No experiment/run tracking.** There's an in-memory 5-minute cache (`route.ts:29-35`) but no persistence of what was actually shown to users historically. Once the historical track record from §3.3 exists, this becomes straightforward — but right now, if a user asks "what did the screener say about COMI last Tuesday," there's no way to answer that.
+- **Monitoring:** the structured logger (`createLogger()`, `technical-screener.ts:192-204`) is a good foundation, but logs are only returned in the API response (`route.ts:189`) — nothing is persisted or aggregated (e.g., no alerting if `dataRatio` degrades repeatedly, no dashboard of anomaly counts over time). Consider shipping these logs to a real log store/alerting pipeline once this runs unattended.
+- **No CI-run backtest gate.** Given the severity of Finding P0-1, add an automated check (unit or integration test) that would have caught it: e.g., assert that `backtestSignals()`'s computed `winRate` is *not* deterministically ~100% when `currentPrices` is set equal to the price used to generate `entryPrice` — a test like this directly encodes "the backtest must not be tautological" and would fail loudly against the current implementation.
+
+### Deployment checklist (recommended, before treating any output as tradeable)
+- [ ] Fix `backtestSignals()` to use genuine forward returns (§3.1–3.2), or clearly relabel the current function/output as "same-day consistency check," not "backtest," until replaced.
+- [ ] Stand up historical OHLCV storage + point-in-time indicator recomputation (§3.3).
+- [ ] Implement walk-forward validation with purged folds and a held-out final test period never touched during weight/threshold tuning.
+- [ ] Add transaction cost + slippage + next-bar-open execution assumptions to any backtest.
+- [ ] Wire `maxPortfolioExposure` and add sector/correlation concentration limits (§5.1).
+- [ ] Verify current EGX price-limit and settlement-cycle rules directly with EGX/MCDR; update the hardcoded 5% assumption accordingly (§6).
+- [ ] Reconcile the module docstring's stated weights with the actual composite formula (§7).
+- [ ] Calibrate the confidence score against realized outcomes once real backtest data exists (§4).
+- [ ] Add a versioned parameter config and persist a signal/outcome history table for reproducibility and future auditing.
+- [ ] Track point-in-time universe membership (listing/delisting dates) rather than a single flat, dated stock list, to remove structural survivorship bias from any historical study.
+
+---
+
+## Bottom line
+
+The engineering quality of the rule-based screener itself is decent — better input validation and test coverage than a lot of hobbyist trading code. The gap is entirely on the *validation* side: nothing in this repository currently demonstrates, or is even capable of demonstrating, that these signals have predictive value, because the one function that claims to measure that is self-referential by construction and the architecture has no historical memory to check against. Treat every past "win rate" or "Sharpe ratio" this system has shown you as an engineering artifact, not a performance result, until §3's fixes are in place — that reframing should drive prioritization more than any single line-item bug above.

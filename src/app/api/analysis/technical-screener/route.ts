@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchTechnicalIndicators, fetchQuotesLive, fetchPerformance } from '@/lib/market-data';
+import { fetchTechnicalIndicators, fetchPerformance } from '@/lib/market-data';
 import { EGX_STOCKS } from '@/lib/egx-stocks';
 import {
   runTechnicalScreener, backtestSignals, toCSV,
@@ -140,15 +140,8 @@ export async function GET(request: NextRequest) {
     // ── Step 5: Backtesting (optional) ──
     let backtest = null;
     if (doBacktest) {
-      log.log('info', 'Backtest', `Running ${backtestPeriod} backtest on ${result.stocks.length} stocks`);
+      log.log('info', 'Backtest', `Running ${backtestPeriod} forward-return check on ${result.stocks.length} stocks`);
       const perfData = await fetchPerformance(result.stocks.map(s => s.symbol));
-
-      // Fetch live quotes only for backtest (for current prices)
-      const liveData = await fetchQuotesLive(result.stocks.map(s => s.symbol));
-      const currentPrices: Record<string, number> = {};
-      for (const s of result.stocks) {
-        currentPrices[s.symbol] = liveData[s.symbol]?.close || s.entryPrice;
-      }
 
       const perfRecord: Record<string, { '1W': number; '1M': number; '3M': number; '6M': number }> = {};
       for (const [sym, p] of Object.entries(perfData)) {
@@ -160,7 +153,15 @@ export async function GET(request: NextRequest) {
         };
       }
 
+      // currentPrices no longer needed for backtest (v3 uses periodReturn)
+      // but kept for SL/TP informational checks
+      const currentPrices: Record<string, number> = {};
+      for (const s of result.stocks) {
+        currentPrices[s.symbol] = s.indicators.close;
+      }
+
       backtest = backtestSignals(result.stocks, perfRecord, currentPrices, backtestPeriod);
+      log.log('info', 'Backtest', `Method: ${backtest.methodology}`);
       log.log('info', 'Backtest', `Win rate: ${backtest.winRate}%, Expectancy: ${backtest.expectancy}%, Sharpe: ${backtest.sharpeRatio}`);
     }
 

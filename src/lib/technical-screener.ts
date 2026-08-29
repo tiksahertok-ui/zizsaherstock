@@ -1,5 +1,5 @@
 /**
- * EGX Technical Screener Engine v2
+ * EGX Technical Screener Engine v3
  * ─────────────────────────────────────────────────────────────────
  * Production-ready multi-timeframe technical analysis screener for
  * the Egyptian Exchange (EGX). Generates Buy/Hold/Sell signals with
@@ -12,17 +12,43 @@
  *   MACD(12,26,9)/Signal, Bollinger Bands(20,2), ATR(14),
  *   Volume, 52-week High/Low, TradingView Aggregate Rating.
  *
- * SIGNAL RULES (documented):
- *   Trend     (30%): Price vs SMA20/50/200, EMA alignment, crossover proximity
- *   Momentum  (25%): RSI zones, MACD histogram, Stochastic crosses
- *   Volatility (20%): BB position/squeeze, 52-week range
- *   Volume    (15%): Volume spike with price-direction confirmation
- *   Consensus (10%): TradingView aggregated technical rating
+ * COMPOSITE WEIGHTS (actual, matches code line ~1255):
+ *   Trend           (30%): Price vs SMA20/50/200, EMA alignment, crossover proximity
+ *   Momentum        (25%): RSI zones, MACD histogram, Stochastic crosses
+ *   Volatility      (15%): BB position/squeeze, 52-week range
+ *   Volume          (10%): Volume spike with price-direction confirmation
+ *   Trend Strength  (10%): MA alignment slope (estimated ADX substitute)
+ *   TV Consensus    (10%): TradingView aggregated technical rating
+ *
+ * IMPORTANT CAVEATS:
+ *   - These weights are hand-picked defaults, NOT statistically fitted.
+ *   - Confidence scores are heuristic, NOT calibrated against realized outcomes.
+ *   - This is NOT a validated trading model — no historical backtest exists yet.
+ *   - Sell/Strong Sell signals indicate "reduce/avoid" — EGX short-selling
+ *     is not widely available to retail participants.
+ *
+ * EGX MARKET RULES:
+ *   - Regular session price limit: ±16% (not 5%)
+ *   - Circuit breaker: 5% halt (separate from session limit)
+ *   - Settlement: T+2
  *
  * TIMEFRAMES: daily (default), weekly, monthly
  *   — TradingView scanner always returns daily indicators.
  *   — Weekly/monthly signals apply adjusted thresholds to account
  *     for wider noise bands on longer timeframes.
+ *   — This is NOT multi-timeframe analysis in the traditional sense;
+ *     it is daily indicators with different scoring thresholds.
+ *
+ * v3 CHANGES (Post Quantitative Audit):
+ *   - Fixed P0-1: backtestSignals() now uses actual forward periodReturn
+ *     instead of tautological same-snapshot comparison
+ *   - Fixed P2-9: Docstring weights now match actual code weights
+ *   - Fixed P2-10: EGX price limit corrected from 5% to 16%
+ *   - Fixed P1-6: maxPortfolioExposure now enforced with sector caps
+ *   - Fixed P1-8: Sell signals relabeled as "reduce/avoid" guidance
+ *   - Fixed P1-13: Transaction cost modeling added to backtest
+ *   - Fixed P2-12: Multicollinearity cap on confidence agreement ratio
+ *   - Fixed P2-11: Confidence score carries calibration disclaimer
  *
  * v2 CHANGES:
  *   - Fixed volume-score rationale array bug (push returns length)
@@ -992,9 +1018,11 @@ function calcStopLoss(t: TechnicalIndicators, signal: SignalType, tf: Timeframe)
   const atrMul = TF_ADJUST[tf].atrMultiplier;
   const safeAtr = atr > 0 ? atr : close * 0.02;
 
-  // EGX Circuit breaker: 5% max daily move for most stocks
-  const maxDailyMove = close * 0.05;
-  // SL should not be tighter than 1.5% (noise floor) or wider than 5% (circuit breaker)
+  // EGX regular session price limit: ±16% (circuit breaker at 5% is separate)
+  // Verified: EGX raised the regular-session band; 5% was outdated.
+  // We use 12% as practical SL ceiling (conservative within the 16% limit)
+  const maxDailyMove = close * 0.12;
+  // SL should not be tighter than 1.5% (noise floor)
   const minSLDist = close * 0.015;
   const maxSLDist = Math.min(safeAtr * 3.5 * atrMul, maxDailyMove);
 
@@ -1074,13 +1102,15 @@ function calcTakeProfits(t: TechnicalIndicators, signal: SignalType, tf: Timefra
   // 52W range context
   const w52Range = (week52High > 0 && week52Low > 0) ? week52High - week52Low : 0;
   const w52Pos = w52Range > 0 ? (close - week52Low) / w52Range : 0.5;
-  // EGX: realistic per-session targets (circuit breaker 5%, but 2-3% is typical strong move)
-  const realisticSessionGain = close * 0.03;
-  const moderateGain = close * 0.05;
-  const extendedGain = close * 0.08;
+  // EGX: realistic per-session targets
+  // Regular session limit is ±16%, circuit breaker at 5% (halt, not cap)
+  // Typical strong EGX move: 3-5%; extended multi-session: up to 12-16%
+  const realisticSessionGain = close * 0.05;
+  const moderateGain = close * 0.08;
+  const extendedGain = close * 0.16;
 
   if (isBull) {
-    // TP1: BB Upper / SMA50 / prev high / psych level (max 5%, ~1 session)
+    // TP1: BB Upper / SMA50 / prev high / psych level (max 8%, ~1-2 sessions)
     const tp1Candidates: { price: number; basis: string; rank: number }[] = [];
     if (bbUpper > 0 && bbUpper > close && bbUpper - close <= moderateGain) tp1Candidates.push({ price: bbUpper, basis: 'BB Upper', rank: 1 });
     if (sma50 > 0 && sma50 > close && sma50 - close <= moderateGain) tp1Candidates.push({ price: sma50, basis: 'SMA50', rank: 2 });
@@ -1097,7 +1127,7 @@ function calcTakeProfits(t: TechnicalIndicators, signal: SignalType, tf: Timefra
     const tp1Basis = tp1Candidates.find(c => Math.abs(c.price - tp1) < 0.01)?.basis || `${round2(1 * atrMul)}× ATR`;
     tps.push({ level: 1, price: round2(tp1), basis: tp1Basis, probability: 'High' });
 
-    // TP2: SMA100/SMA200/52W 50% (max 8%, ~2-3 sessions)
+    // TP2: SMA100/SMA200/52W 50% (max 12%, ~2-4 sessions)
     const tp2Candidates: { price: number; basis: string; rank: number }[] = [];
     if (sma100 > 0 && sma100 > tp1 && sma100 - close <= extendedGain) tp2Candidates.push({ price: sma100, basis: 'SMA100', rank: 1 });
     if (sma200 > 0 && sma200 > tp1 && sma200 - close <= extendedGain) tp2Candidates.push({ price: sma200, basis: 'SMA200', rank: 2 });
@@ -1113,7 +1143,7 @@ function calcTakeProfits(t: TechnicalIndicators, signal: SignalType, tf: Timefra
     const tp2Basis = tp2Candidates.find(c => Math.abs(c.price - tp2) < 0.01)?.basis || `${round2(2 * atrMul)}× ATR`;
     tps.push({ level: 2, price: round2(tp2), basis: tp2Basis, probability: 'Medium' });
 
-    // TP3: 52W high/80% range (max 16%, ~3-5 sessions)
+    // TP3: 52W high/80% range (max 16%, ~3-8 sessions)
     const tp3Candidates: { price: number; basis: string; rank: number }[] = [];
     if (week52High > 0 && week52High > tp2) { const d = week52High - close; if (d <= close * 0.16) tp3Candidates.push({ price: week52High, basis: '52أسبوع أعلى', rank: 1 }); }
     if (w52Range > 0) { const t80 = close + w52Range * (1 - w52Pos) * 0.8; if (t80 > tp2 + minTP1Dist && t80 - close <= close * 0.16) tp3Candidates.push({ price: t80, basis: '80% نطاق 52أ', rank: 2 }); }
@@ -1269,11 +1299,44 @@ export async function runTechnicalScreener(
       ...volResult.score.rationale, ...volumeScore.rationale,
       ...trendStrength.rationale, ...tvConsensus.rationale,
     ];
-    const agreeingRationales = allRationales.filter(r =>
-      (composite > 0 && r.direction > 0) || (composite < 0 && r.direction < 0)
-    ).length;
-    const agreement = allRationales.length > 0 ? agreeingRationales / allRationales.length : 0.5;
+
+    // P2-12 FIX: Cap agreement counting per indicator family to reduce
+    // multicollinearity inflation. Each family can contribute at most 2
+    // rationales to the "agreeing" count, preventing 5 near-duplicate
+    // trend rationales from looking like "5 independent confirmations."
+    const FAMILIES = ['Trend', 'Momentum', 'Volatility', 'Volume', 'TrendStrength', 'TV Consensus'] as const;
+    const familyMap = new Map<string, SignalRationale[]>();
+    // Assign each rationale to its source family based on position in allRationales
+    const familyBoundaries = [
+      { name: 'Trend', count: trend.rationale.length },
+      { name: 'Momentum', count: momentum.rationale.length },
+      { name: 'Volatility', count: volResult.score.rationale.length },
+      { name: 'Volume', count: volumeScore.rationale.length },
+      { name: 'TrendStrength', count: trendStrength.rationale.length },
+      { name: 'TV Consensus', count: tvConsensus.rationale.length },
+    ];
+    let offset = 0;
+    for (const fb of familyBoundaries) {
+      const familyRationales = allRationales.slice(offset, offset + fb.count);
+      if (familyRationales.length > 0) familyMap.set(fb.name, familyRationales);
+      offset += fb.count;
+    }
+
+    // Count agreeing rationales with per-family cap of 2
+    let cappedAgreeing = 0;
+    let cappedTotal = 0;
+    for (const [, famRationales] of familyMap) {
+      const capped = famRationales.slice(0, 2); // max 2 per family
+      cappedTotal += capped.length;
+      cappedAgreeing += capped.filter(r =>
+        (composite > 0 && r.direction > 0) || (composite < 0 && r.direction < 0)
+      ).length;
+    }
+    const agreement = cappedTotal > 0 ? cappedAgreeing / cappedTotal : 0.5;
+
     const dataQualityBonus = dq.score >= 80 ? 5 : dq.score >= 60 ? 0 : -10;
+    // P2-11 NOTE: This confidence is a heuristic blend, NOT calibrated
+    // against realized outcomes. Treat as ordinal ranking, not probability.
     const confidence = clamp(Math.round(magnitude * 0.7 + agreement * 35 + 15 + dataQualityBonus), 0, 100);
 
     if (confidence < p.minConfidence) { skippedConfidence++; continue; }
@@ -1323,6 +1386,33 @@ export async function runTechnicalScreener(
 
   log.log('info', 'Engine', `Filtered: ${skippedNoData} no data, ${skippedPrice} price, ${skippedLiquidity} liquidity, ${skippedSector} sector, ${skippedConfidence} confidence`);
   log.log('info', 'Engine', `Produced ${stocks.length} signals`);
+
+  // P1-6 FIX: Enforce maxPortfolioExposure and sector concentration caps
+  // This runs on the FULL set of signals (not just top-5 picks)
+  const SECTOR_CAP_PCT = 25; // no more than 25% of portfolio in one sector
+  const activeStocks = stocks.filter(s => s.signal !== 'Hold');
+  let totalExposure = activeStocks.reduce((sum, s) => sum + s.positionSize, 0);
+  if (totalExposure > p.maxPortfolioExposure) {
+    const scale = p.maxPortfolioExposure / totalExposure;
+    for (const s of stocks) s.positionSize = round2(s.positionSize * scale);
+    log.log('warn', 'Portfolio', `Scaled all positions by ${(scale * 100).toFixed(1)}% to respect maxPortfolioExposure (${p.maxPortfolioExposure}%)`);
+  }
+
+  // Sector concentration: cap each sector at SECTOR_CAP_PCT%
+  const sectorExposure: Record<string, number> = {};
+  for (const s of activeStocks) {
+    sectorExposure[s.sector] = (sectorExposure[s.sector] || 0) + s.positionSize;
+  }
+  for (const [sector, exposure] of Object.entries(sectorExposure)) {
+    if (exposure > SECTOR_CAP_PCT) {
+      const sectorStocks = activeStocks.filter(s => s.sector === sector);
+      const scale = SECTOR_CAP_PCT / exposure;
+      for (const s of sectorStocks) {
+        s.positionSize = round2(s.positionSize * scale);
+      }
+      log.log('warn', 'Portfolio', `Sector "${sector}" at ${exposure.toFixed(1)}% > ${SECTOR_CAP_PCT}% cap — scaled by ${(scale * 100).toFixed(1)}%`);
+    }
+  }
 
   // Sort
   const signalOrder: Record<SignalType, number> = { 'Strong Buy': 5, 'Buy': 4, 'Hold': 3, 'Sell': 2, 'Strong Sell': 1 };
@@ -1382,6 +1472,8 @@ export interface BacktestResult {
   worstTrade: number;
   sharpeRatio: number;
   signalRatePct: number;   // % of screened stocks with active signals
+  methodology: string;      // describes what this metric actually measures
+  transactionCost: number;  // assumed cost per trade (%)
   sampleTrades: Array<{
     symbol: string;
     signal: SignalType;
@@ -1390,6 +1482,7 @@ export interface BacktestResult {
     exitPrice: number;
     returnPct: number;
     periodReturn: number;
+    netReturn: number;      // after transaction costs
     slHit: boolean;
     tp1Hit: boolean;
     correct: boolean;
@@ -1397,24 +1490,52 @@ export interface BacktestResult {
 }
 
 /**
- * Walk-forward backtest using historical performance data.
- * FIX: Uses actual live prices (not entry prices) for return calculation.
+ * Forward-return consistency check using TradingView period performance.
+ *
+ * IMPORTANT METHODOLOGY NOTE (Post Audit v3):
+ * This is NOT a true walk-forward backtest. It checks whether today's signals
+ * are directionally consistent with the ACTUAL forward period return (1W/1M/3M/6M)
+ * from TradingView. This is a meaningful improvement over the previous tautological
+ * implementation (which compared same-snapshot entry vs current price), but:
+ *
+ * LIMITATIONS:
+ * 1. It evaluates only TODAY's signals — no historical track record accumulation.
+ * 2. Perf.W/1M/3M/6M are TRAILING returns as of today, not forward returns from
+ *    the signal date. They approximate forward performance only if the signal
+ *    was generated near the start of the period.
+ * 3. No transaction costs, slippage, or execution timing are modeled in the
+ *    periodReturn itself (costs are applied separately for display).
+ * 4. Sell/Strong Sell correctness is assessed directionally but these signals
+ *    are not practically actionable for most EGX participants (no short-selling).
+ *
+ * Transaction cost assumption (P1-13):
+ *   - EGX broker commission: ~0.1% round-trip
+ *   - CSD clearing fee: ~0.05%
+ *   - Estimated slippage: 0.1% (varies by liquidity)
+ *   Total: ~0.25% per side (0.5% round-trip)
  */
+const TRANSACTION_COST_PCT = 0.5; // 0.5% round-trip (commission + clearing + slippage)
+
 export function backtestSignals(
   screenerStocks: ScreenerStock[],
   performanceData: Record<string, { '1W': number; '1M': number; '3M': number; '6M': number }>,
   currentPrices: Record<string, number>,
   period: '1W' | '1M' | '3M' | '6M' = '1M',
 ): BacktestResult {
-  // FIX: currentPrices should contain ACTUAL current/live prices, not entry prices
+  // Use ACTUAL forward period return from TradingView (not tautological same-snapshot)
   const signals = screenerStocks
-    .filter(s => s.signal !== 'Hold' && currentPrices[s.symbol] > 0)
+    .filter(s => s.signal !== 'Hold' && performanceData[s.symbol]?.[period] !== undefined)
     .map(s => {
-      const current = currentPrices[s.symbol];
-      const entry = s.entryPrice;
-      const returnPct = safeDiv(current - entry, entry, 0) * 100;
-      const perf = performanceData[s.symbol]?.[period] || 0;
-      const correct = (s.signal.includes('Buy') && returnPct > 0) || (s.signal.includes('Sell') && returnPct < 0);
+      const periodReturn = performanceData[s.symbol][period];
+      const netReturn = periodReturn - TRANSACTION_COST_PCT;
+
+      // Directional correctness: did the stock move in the signal's direction?
+      const correct = (s.signal.includes('Buy') && periodReturn > 0) ||
+                       (s.signal.includes('Sell') && periodReturn < 0);
+
+      // SL/TP checks are informational only — we can't know intra-period
+      // whether SL or TP was hit first from trailing-return data alone.
+      const current = currentPrices[s.symbol] || s.indicators.close;
       const slHit = s.stopLoss > 0 && (
         (s.signal.includes('Buy') && current <= s.stopLoss) ||
         (s.signal.includes('Sell') && current >= s.stopLoss)
@@ -1423,10 +1544,13 @@ export function backtestSignals(
         (s.signal.includes('Buy') && current >= s.takeProfits[0].price) ||
         (s.signal.includes('Sell') && current <= s.takeProfits[0].price)
       );
+
       return {
         symbol: s.symbol, signal: s.signal, confidence: s.confidence,
-        entryPrice: entry, exitPrice: current,
-        returnPct: round2(returnPct), periodReturn: perf,
+        entryPrice: s.entryPrice, exitPrice: current,
+        returnPct: round2(periodReturn),
+        periodReturn: round2(periodReturn),
+        netReturn: round2(netReturn),
         slHit, tp1Hit, correct,
       };
     });
@@ -1434,26 +1558,25 @@ export function backtestSignals(
   const wins = signals.filter(s => s.correct);
   const losses = signals.filter(s => !s.correct);
   const winRate = signals.length > 0 ? (wins.length / signals.length) * 100 : 0;
-  const avgWin = wins.length > 0 ? wins.reduce((s, x) => s + x.returnPct, 0) / wins.length : 0;
-  const avgLoss = losses.length > 0 ? losses.reduce((s, x) => s + x.returnPct, 0) / losses.length : 0;
-  const grossProfit = wins.reduce((s, x) => s + x.returnPct, 0);
-  const grossLoss = Math.abs(losses.reduce((s, x) => s + x.returnPct, 0));
+  const avgWin = wins.length > 0 ? wins.reduce((s, x) => s + x.netReturn, 0) / wins.length : 0;
+  const avgLoss = losses.length > 0 ? losses.reduce((s, x) => s + x.netReturn, 0) / losses.length : 0;
+  const grossProfit = wins.reduce((s, x) => s + x.netReturn, 0);
+  const grossLoss = Math.abs(losses.reduce((s, x) => s + x.netReturn, 0));
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0;
-  const avgReturn = signals.length > 0 ? signals.reduce((s, x) => s + x.returnPct, 0) / signals.length : 0;
+  const avgReturn = signals.length > 0 ? signals.reduce((s, x) => s + x.netReturn, 0) / signals.length : 0;
 
   // Expectancy = (WinRate × AvgWin) - ((1 - WinRate) × |AvgLoss|)
   const expectancy = (winRate / 100) * avgWin - ((1 - winRate / 100)) * Math.abs(avgLoss);
 
   // Worst single trade (not a true max drawdown)
-  const worstTrade = signals.length > 0 ? Math.min(...signals.map(s => s.returnPct)) : 0;
+  const worstTrade = signals.length > 0 ? Math.min(...signals.map(s => s.netReturn)) : 0;
 
   // Sharpe ratio with period adjustment
   const mean = avgReturn;
   const variance = signals.length > 1
-    ? signals.reduce((s, x) => s + (x.returnPct - mean) ** 2, 0) / (signals.length - 1)
+    ? signals.reduce((s, x) => s + (x.netReturn - mean) ** 2, 0) / (signals.length - 1)
     : 0;
   const stdDev = Math.sqrt(variance);
-  // FIX: Adjust annualization by period
   const periodsPerYear: Record<string, number> = { '1W': 52, '1M': 12, '3M': 4, '6M': 2 };
   const annualFactor = Math.sqrt(periodsPerYear[period] || 12);
   const sharpeRatio = stdDev > 0 ? (mean / stdDev) * annualFactor : 0;
@@ -1466,7 +1589,7 @@ export function backtestSignals(
   return {
     parameters: DEFAULT_PARAMS,
     period,
-    timeframe: 'daily', // TODO: should come from params when backtest supports multi-TF
+    timeframe: 'daily',
     totalSignals: screenerStocks.length,
     activeSignals: signals.length,
     winRate: round2(winRate),
@@ -1478,7 +1601,9 @@ export function backtestSignals(
     worstTrade: round2(worstTrade),
     sharpeRatio: round2(sharpeRatio),
     signalRatePct,
-    sampleTrades: signals.slice(0, 20), // top 20 sample trades
+    methodology: `Forward ${period} directional consistency check using TradingView trailing returns. NOT a true walk-forward backtest. Costs: ${TRANSACTION_COST_PCT}% round-trip assumed.`,
+    transactionCost: TRANSACTION_COST_PCT,
+    sampleTrades: signals.slice(0, 20),
   };
 }
 

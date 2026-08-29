@@ -106,7 +106,7 @@ const SIGNAL_CONFIG: Record<SignalType, {
 };
 
 const SIGNAL_AR: Record<SignalType, string> = {
-  'Strong Buy': 'شراء قوي', Buy: 'شراء', Hold: 'انتظار', Sell: 'بيع', 'Strong Sell': 'بيع قوي',
+  'Strong Buy': 'شراء قوي', Buy: 'شراء', Hold: 'انتظار', Sell: 'تقليل', 'Strong Sell': 'تجنب',
 };
 
 const SECTORS = [
@@ -770,8 +770,8 @@ export default function ScreenerPage() {
                 { label: 'شراء قوي', value: summary.strongBuy, icon: TrendingUp, color: 'text-emerald-600 dark:text-emerald-400', sub: pctOf(summary.strongBuy, summary.total) + '%', accent: 'border-emerald-500/20 bg-emerald-500/[0.03]' },
                 { label: 'شراء', value: summary.buy, icon: TrendingUp, color: 'text-emerald-500', sub: pctOf(summary.buy, summary.total) + '%', accent: 'border-emerald-400/15 bg-emerald-400/[0.02]' },
                 { label: 'انتظار', value: summary.hold, icon: Minus, color: 'text-amber-500', sub: pctOf(summary.hold, summary.total) + '%', accent: 'border-amber-400/15 bg-amber-400/[0.02]' },
-                { label: 'بيع', value: summary.sell, icon: TrendingDown, color: 'text-red-500', sub: pctOf(summary.sell, summary.total) + '%', accent: 'border-red-400/15 bg-red-400/[0.02]' },
-                { label: 'بيع قوي', value: summary.strongSell, icon: TrendingDown, color: 'text-red-600 dark:text-red-400', sub: pctOf(summary.strongSell, summary.total) + '%', accent: 'border-red-500/20 bg-red-500/[0.03]' },
+                { label: 'تقليل', value: summary.sell, icon: TrendingDown, color: 'text-red-500', sub: pctOf(summary.sell, summary.total) + '%', accent: 'border-red-400/15 bg-red-400/[0.02]' },
+                { label: 'تجنب', value: summary.strongSell, icon: TrendingDown, color: 'text-red-600 dark:text-red-400', sub: pctOf(summary.strongSell, summary.total) + '%', accent: 'border-red-500/20 bg-red-500/[0.03]' },
               ].map((c, i) => {
                 const Icon = c.icon;
                 return (
