@@ -1,31 +1,27 @@
-```gitignore
+
 # Compiled and build artifacts
-*.pyc
-__pycache__/
-
 # Dependencies
-.venv/
-venv/
-node_modules/
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment
-.env
-.env.local
-*.env.*
-
+# Directories
 # Editors
-.vscode/
-.idea/
-
+# Environment
+# Logs and temp files
 # Office documents
 *.docx
-
-# Directories
-zizsaherstock/
+*.env.*
+*.log
+*.pyc
+*.swp
+*.tmp
+.env
+.env.local
+.idea/
+.next/
+.venv/
+.vscode/
+__pycache__/
 ```.next/
+```gitignore
+node_modules/
 tool-results/
+venv/
+zizsaherstock/
