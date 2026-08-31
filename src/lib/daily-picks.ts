@@ -358,3 +358,146 @@ export function getStrengthLabel(score: number): { label: string; color: string;
   if (score >= 55) return { label: 'قوية', color: 'text-amber-600', bgColor: 'bg-amber-500/10' };
   return { label: 'متوسطة', color: 'text-muted-foreground', bgColor: 'bg-muted' };
 }
+
+// ── P1-2: Personalization (§9 Governance) ──────────────────────
+
+/**
+ * User context for personalization.
+ * Designed for minimal data — only what's needed for diversification re-ranking.
+ * No raw portfolio values are used as scoring inputs (purpose limitation, §9).
+ */
+export interface UserContext {
+  /** Sectors the user already has exposure to (from holdings) */
+  heldSectors: string[];
+  /** Symbols the user holds (to avoid surfacing stocks they already own) */
+  heldSymbols: string[];
+  /** Symbols on the user's watchlist (slight boost — indicates interest) */
+  watchlistSymbols: string[];
+}
+
+/**
+ * Re-rank picks based on user context.
+ *
+ * Strategy (lightweight, no full recompute):
+ *   1. Sector diversification: penalize stocks in sectors where user is
+ *      already over-concentrated (more than 1 holding).
+ *   2. Deduplication: penalize stocks the user already holds.
+ *   3. Watchlist affinity: slight boost for watchlist symbols (user
+ *      has indicated interest).
+ *   4. Re-sort by adjusted score.
+ *
+ * The original score is preserved — this is a post-hoc adjustment,
+ * not a new scoring model. The adjustment is small enough that the
+ * ranking only changes when scores are close (which is exactly when
+ * diversification should matter).
+ *
+ * Users can opt out by passing UserContext with empty arrays.
+ */
+export function personalizePicks(
+  picks: DailyPick[],
+  userContext: UserContext,
+): { picks: DailyPick[]; adjustments: Array<{ symbol: string; originalRank: number; newRank: number; reason: string }> } {
+  if (!userContext.heldSectors.length && !userContext.heldSymbols.length && !userContext.watchlistSymbols.length) {
+    return { picks, adjustments: [] };
+  }
+
+  // Count sector concentration in user's holdings
+  const sectorCounts: Record<string, number> = {};
+  for (const s of userContext.heldSectors) {
+    sectorCounts[s] = (sectorCounts[s] || 0) + 1;
+  }
+
+  // Apply adjustments
+  const adjusted = picks.map(pick => {
+    let adj = 0;
+    const reasons: string[] = [];
+
+    // Dedup: penalize already-held stocks (move them down unless they're #1)
+    if (userContext.heldSymbols.includes(pick.symbol)) {
+      adj -= 5;
+      reasons.push('already_held');
+    }
+
+    // Sector diversification: penalize if user has 2+ holdings in same sector
+    const sectorCount = sectorCounts[pick.sector] || 0;
+    if (sectorCount >= 2) {
+      adj -= 3;
+      reasons.push('sector_overconcentrated');
+    } else if (sectorCount === 1) {
+      adj -= 1;
+      reasons.push('sector_exposure_exists');
+    }
+
+    // Watchlist affinity: slight boost for watchlist symbols
+    if (userContext.watchlistSymbols.includes(pick.symbol)) {
+      adj += 2;
+      reasons.push('watchlist_affinity');
+    }
+
+    return {
+      ...pick,
+      nextSessionScore: Math.max(0, pick.nextSessionScore + adj),
+      _personalizationAdj: adj,
+      _personalizationReasons: reasons,
+    } as DailyPick & { _personalizationAdj: number; _personalizationReasons: string[] };
+  });
+
+  // Re-sort and re-rank
+  adjusted.sort((a, b) => b.nextSessionScore - a.nextSessionScore);
+  const reRanked = adjusted.map((s, i) => ({ ...s, rank: i + 1 }));
+
+  // Track what changed
+  const adjustments = reRanked
+    .filter(p => (p as any)._personalizationAdj !== 0)
+    .map(p => {
+      const originalRank = picks.find(op => op.symbol === p.symbol)?.rank || 0;
+      const reasonMap: Record<string, string> = {
+        already_held: 'السهم محفوظ بالفعل',
+        sector_overconcentrated: 'تركز قطاعي (>2 محفوظة)',
+        sector_exposure_exists: 'تعرض قطاعي موجود',
+        watchlist_affinity: 'في قائمة المراقبة',
+      };
+      const reasons = ((p as any)._personalizationReasons as string[]) || [];
+      return {
+        symbol: p.symbol,
+        originalRank,
+        newRank: p.rank,
+        reason: reasons.map(r => reasonMap[r] || r).join('، ')
+      }
+    });
+
+  return { picks: reRanked, adjustments };
+}
+
+// ── A/B: Confidence-only baseline ranking (§6, P1-1) ───────────
+
+export type RankingMethod = 'nextSessionScore' | 'confidence';
+
+/**
+ * Compute daily picks using a specific ranking method.
+ * Enables A/B testing of ranking formulas (§6 of audit).
+ *
+ * @param method - 'nextSessionScore' = our composite, 'confidence' = naive baseline
+ */
+export function computeDailyPicksWithMethod(
+  stocks: ScreenerStock[],
+  method: RankingMethod = 'nextSessionScore',
+  params?: Partial<typeof DAILY_PICKS_PARAMS>,
+): DailyPicksResult & { rankingMethod: RankingMethod } {
+  const base = computeDailyPicks(stocks, params);
+
+  if (method === 'confidence') {
+    const reSorted = [...base.picks].sort((a, b) => b.confidence - a.confidence);
+    const reRanked = reSorted.map((s, i) => ({ ...s, rank: i + 1 }));
+    const sectorDist: Record<string, number> = {};
+    for (const p of reRanked) sectorDist[p.sector] = (sectorDist[p.sector] || 0) + 1;
+    return {
+      ...base,
+      picks: reRanked,
+      sectorDistribution: sectorDist,
+      rankingMethod: method,
+    };
+  }
+
+  return { ...base, rankingMethod: method };
+}

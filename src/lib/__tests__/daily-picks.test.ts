@@ -7,6 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeDailyPicks,
+  computeDailyPicksWithMethod,
+  personalizePicks,
   getStrengthLabel,
   DAILY_PICKS_PARAMS,
   DAILY_PICKS_VERSION,
@@ -324,5 +326,115 @@ describe('getStrengthLabel', () => {
     const result = getStrengthLabel(80);
     expect(result.color).toBeTruthy();
     expect(result.bgColor).toBeTruthy();
+  });
+});
+
+// ── P1-2: Personalization Tests ─────────────────────────────────
+
+describe('personalizePicks', () => {
+  it('returns unchanged picks when user context is empty', () => {
+    const result = computeDailyPicks([
+      makeStock({ symbol: 'A', confidence: 80, sector: 'Financials' }),
+      makeStock({ symbol: 'B', confidence: 60, sector: 'Real Estate' }),
+    ]);
+    const { picks, adjustments } = personalizePicks(result.picks, { heldSectors: [], heldSymbols: [], watchlistSymbols: [] });
+    expect(picks[0].symbol).toBe('A');
+    expect(adjustments.length).toBe(0);
+  });
+
+  it('penalizes stocks the user already holds', () => {
+    const result = computeDailyPicks([
+      makeStock({ symbol: 'HELD', confidence: 70, sector: 'Financials' }),
+      makeStock({ symbol: 'NEW', confidence: 68, sector: 'Real Estate' }),
+    ]);
+    const { picks, adjustments } = personalizePicks(result.picks, { heldSectors: [], heldSymbols: ['HELD'], watchlistSymbols: [] });
+    // NEW should now be #1 because HELD was penalized
+    expect(picks[0].symbol).toBe('NEW');
+    expect(adjustments.length).toBe(1);
+    expect(adjustments[0].symbol).toBe('HELD');
+  });
+
+  it('penalizes over-concentrated sectors (2+ holdings)', () => {
+    const result = computeDailyPicks([
+      makeStock({ symbol: 'FIN_A', confidence: 75, sector: 'Financials' }),
+      makeStock({ symbol: 'FIN_B', confidence: 72, sector: 'Financials' }),
+      makeStock({ symbol: 'REAL', confidence: 71, sector: 'Real Estate' }),
+    ]);
+    const { picks } = personalizePicks(result.picks, {
+      heldSectors: ['Financials', 'Financials'], heldSymbols: [], watchlistSymbols: [],
+    });
+    // REAL should rank higher than FIN_A or FIN_B due to sector penalty
+    const realIdx = picks.findIndex(p => p.symbol === 'REAL');
+    expect(realIdx).toBe(0);
+  });
+
+  it('boosts watchlist symbols slightly', () => {
+    const result = computeDailyPicks([
+      makeStock({ symbol: 'WATCH', confidence: 55, sector: 'Technology' }),
+      makeStock({ symbol: 'OTHER', confidence: 56, sector: 'Energy' }),
+    ]);
+    const { picks, adjustments } = personalizePicks(result.picks, {
+      heldSectors: [], heldSymbols: [], watchlistSymbols: ['WATCH'],
+    });
+    // WATCH was 1 pt behind but gets +2 boost → now ahead
+    expect(picks[0].symbol).toBe('WATCH');
+    expect(adjustments.some(a => a.symbol === 'WATCH')).toBe(true);
+  });
+
+  it('tracks rank changes in adjustments', () => {
+    const result = computeDailyPicks([
+      makeStock({ symbol: 'X', confidence: 80, sector: 'S1' }),
+      makeStock({ symbol: 'Y', confidence: 79, sector: 'S2' }),
+      makeStock({ symbol: 'Z', confidence: 78, sector: 'S1' }),
+    ]);
+    const { picks, adjustments } = personalizePicks(result.picks, {
+      heldSectors: ['S1', 'S1'], heldSymbols: [], watchlistSymbols: [],
+    });
+    // Both S1 stocks should be penalized and potentially rank-shifted
+    for (const adj of adjustments) {
+      expect(adj.originalRank).toBeGreaterThan(0);
+      expect(adj.newRank).toBeGreaterThan(0);
+      expect(adj.reason).toBeTruthy();
+    }
+  });
+
+  it('reasons are in Arabic', () => {
+    const result = computeDailyPicks([makeStock({ symbol: 'A' }), makeStock({ symbol: 'B' })]);
+    const { adjustments } = personalizePicks(result.picks, { heldSectors: [], heldSymbols: ['A'], watchlistSymbols: [] });
+    const heldAdj = adjustments.find(a => a.symbol === 'A');
+    expect(heldAdj?.reason).toContain('محفوظ');
+  });
+});
+
+// ── A/B: Ranking Method Tests (§6) ──────────────────────────────
+
+describe('computeDailyPicksWithMethod', () => {
+  it('returns rankingMethod=nextSessionScore by default', () => {
+    const result = computeDailyPicksWithMethod([
+      makeStock({ symbol: 'A', confidence: 90 }),
+      makeStock({ symbol: 'B', confidence: 50 }),
+    ]);
+    expect(result.rankingMethod).toBe('nextSessionScore');
+  });
+
+  it('with confidence method, sorts by confidence not composite score', () => {
+    // Make B have higher confidence but lower composite
+    const result = computeDailyPicksWithMethod([
+      makeStock({ symbol: 'A', confidence: 50, tags: ['BB Squeeze', 'Volume Spike Up', 'MACD Cross Up'] }),
+      makeStock({ symbol: 'B', confidence: 95, tags: [] }),
+    ], 'confidence');
+    expect(result.rankingMethod).toBe('confidence');
+    expect(result.picks[0].symbol).toBe('B'); // B has higher confidence
+    expect(result.picks[0].rank).toBe(1);
+  });
+
+  it('with nextSessionScore method, may rank differently than confidence', () => {
+    const result = computeDailyPicksWithMethod([
+      makeStock({ symbol: 'A', confidence: 50, tags: ['BB Squeeze', 'Volume Spike Up', 'MACD Cross Up'] }),
+      makeStock({ symbol: 'B', confidence: 95, tags: [] }),
+    ], 'nextSessionScore');
+    // A has stronger technical setup despite lower confidence
+    // (BB squeeze + volume spike + MACD cross = many bonus points)
+    expect(result.picks[0].symbol).toBe('A');
   });
 });
