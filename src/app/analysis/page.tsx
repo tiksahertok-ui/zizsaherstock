@@ -32,6 +32,16 @@ interface DataQuality { score: number; grade: string; missingIndicators: string[
 interface EntryPriceDetail {
   price: number; strategy: string; basis: string; discount: number;
 }
+
+// ── Daily Picks types (from server-side API) ──
+interface DailyPickScoreBreakdown { signal: number; trend: number; momentum: number; volume: number; riskReward: number; pattern: number; total: number; }
+interface DailyPick extends ScreenerStock {
+  nextSessionScore: number;
+  scoreBreakdown: DailyPickScoreBreakdown;
+  rank: number;
+  topRationale: string[];
+}
+
 interface ScreenerStock {
   symbol: string; name: string; sector: string;
   signal: SignalType; confidence: number;
@@ -139,6 +149,30 @@ export default function ScreenerPage() {
   const [lastUpdated, setLastUpdated] = useState<string>('');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
+  // ── Daily Picks state (server-computed) ──
+  const [dailyPicks, setDailyPicks] = useState<DailyPick[]>([]);
+  const [dailyPicksLoading, setDailyPicksLoading] = useState(true);
+  const [dailyPicksMeta, setDailyPicksMeta] = useState<{ totalCandidates: number; version: string; generatedAt: string; disclaimer: string } | null>(null);
+
+  const fetchDailyPicks = useCallback(async () => {
+    setDailyPicksLoading(true);
+    try {
+      const res = await fetch(`/api/analysis/daily-picks?timeframe=${timeframe}`);
+      if (!res.ok) throw new Error('fail');
+      const data = await res.json();
+      setDailyPicks(data.picks || []);
+      setDailyPicksMeta({
+        totalCandidates: data.totalCandidates,
+        version: data._meta?.scoringVersion,
+        generatedAt: data.generatedAt,
+        disclaimer: data._meta?.disclaimer,
+      });
+    } catch { /* silent — picks are supplementary, not critical */ }
+    finally { setDailyPicksLoading(false); }
+  }, [timeframe]);
+
+  useEffect(() => { fetchDailyPicks(); }, [fetchDailyPicks]);
+
   const fetchScreener = useCallback(async () => {
     setLoading(true);
     try {
@@ -156,112 +190,6 @@ export default function ScreenerPage() {
   }, [sector, signalFilter, minConfidence, sortField, timeframe]);
 
   useEffect(() => { fetchScreener(); }, [fetchScreener]);
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // DAILY PICKS — Stocks with strongest NEXT SESSION bullish potential
-  // ═══════════════════════════════════════════════════════════════════════
-  // Scoring model evaluates 6 dimensions that predict next-session upside:
-  //
-  // 1. SIGNAL STRENGTH (25 pts): Strong Buy vs Buy + confidence level
-  // 2. TREND QUALITY (20 pts): EMA stack alignment, price vs key MAs
-  // 3. MOMENTUM QUALITY (20 pts): MACD direction, RSI sweet spot (40-65),
-  //    Stochastic position — all indicating more room to run
-  // 4. VOLUME INTEREST (15 pts): Volume above 30-day average = institutional
-  //    participation driving next session
-  // 5. RISK:REWARD (10 pts): Better R:R = more attractive opportunity
-  // 6. PATTERN BONUS (10 pts): Breakout setup, reversal from support,
-  //    BB squeeze — patterns that typically produce next-day moves
-  //
-  const dailyBuyPicks = useMemo(() => {
-    return stocks
-      .filter(s => {
-        if (s.signal !== 'Strong Buy' && s.signal !== 'Buy') return false;
-        if (s.confidence < 40) return false;
-        if (s.riskReward < 1.5) return false;
-        const ind = s.indicators;
-        // RSI must have room to run (not overbought >75, not exhausted <25)
-        if (ind.rsi > 0 && ind.rsi > 75) return false;
-        // MACD must be bullish or crossing up
-        if (ind.macd < 0 && ind.macdSignal < 0 && ind.macd < ind.macdSignal) return false;
-        return true;
-      })
-      .map(s => {
-        const ind = s.indicators;
-        let score = 0;
-
-        // ── 1. SIGNAL STRENGTH (25 pts) ──
-        const signalPts = s.signal === 'Strong Buy' ? 25 : 15;
-        const confPts = Math.min(s.confidence / 100, 1) * 15; // up to 15 bonus for high confidence
-        score += signalPts + confPts;
-
-        // ── 2. TREND QUALITY (20 pts) ──
-        let trendPts = 0;
-        // Perfect EMA stack: EMA20 > EMA50 > EMA200
-        if (ind.ema20 > 0 && ind.ema50 > 0 && ind.ema200 > 0 && ind.ema20 > ind.ema50 && ind.ema50 > ind.ema200) {
-          trendPts += 8; // perfect stack
-        } else if (ind.ema20 > 0 && ind.ema50 > 0 && ind.ema20 > ind.ema50) {
-          trendPts += 5; // partial stack
-        }
-        // Price above all key MAs
-        if (ind.sma20 > 0 && ind.close > ind.sma20) trendPts += 3;
-        if (ind.sma50 > 0 && ind.close > ind.sma50) trendPts += 3;
-        if (ind.sma200 > 0 && ind.close > ind.sma200) trendPts += 3;
-        // Price above EMA20 (short-term bullish)
-        if (ind.ema20 > 0 && ind.close > ind.ema20) trendPts += 3;
-        score += Math.min(trendPts, 20);
-
-        // ── 3. MOMENTUM QUALITY (20 pts) ──
-        let momPts = 0;
-        // RSI sweet spot: 40-65 = healthy uptrend with room to run
-        if (ind.rsi > 0) {
-          if (ind.rsi >= 45 && ind.rsi <= 65) momPts += 8; // ideal zone
-          else if (ind.rsi >= 35 && ind.rsi < 45) momPts += 5; // approaching ideal
-          else if (ind.rsi > 65 && ind.rsi <= 75) momPts += 3; // still OK
-          else if (ind.rsi < 35) momPts += 4; // oversold bounce potential
-        }
-        // MACD histogram positive and expanding
-        const hist = ind.macd - ind.macdSignal;
-        if (hist > 0) momPts += 5; // positive histogram
-        if (hist > 0 && ind.macd > ind.macdSignal) momPts += 3; // expanding
-        // Stochastic in bullish territory but not overbought
-        if (ind.stochK > 0 && ind.stochD > 0) {
-          if (ind.stochK > ind.stochD && ind.stochK < 75) momPts += 4; // bullish cross below 75
-          else if (ind.stochK > 20 && ind.stochK < 50 && ind.stochK > ind.stochD) momPts += 3; // low zone bull cross
-        }
-        score += Math.min(momPts, 20);
-
-        // ── 4. VOLUME INTEREST (15 pts) ──
-        let volPts = 0;
-        // Check if there are volume-related bullish tags
-        const hasVolSpike = s.tags.some(t => t === 'Volume Spike Up' || t === 'Strong Volume Up');
-        const hasAccumulation = s.tags.some(t => t === 'Normal Volume Up');
-        if (hasVolSpike) volPts += 12;
-        else if (hasAccumulation) volPts += 7;
-        else volPts += 4; // baseline — stock passed liquidity filter
-        score += Math.min(volPts, 15);
-
-        // ── 5. RISK:REWARD (10 pts) ──
-        const rrPts = Math.min(s.riskReward / 4, 1) * 10; // 4:1 R:R = full 10 pts
-        score += rrPts;
-
-        // ── 6. PATTERN BONUS (10 pts) ──
-        let patPts = 0;
-        // Breakout patterns (high next-session probability)
-        if (s.tags.some(t => t === 'Above SMA50' || t === 'Above SMA200')) patPts += 3;
-        if (s.tags.some(t => t === 'BB Squeeze')) patPts += 4; // squeeze = imminent move
-        if (s.tags.some(t => t === 'MACD Cross Up')) patPts += 3; // fresh crossover
-        if (s.tags.some(t => t === 'Bullish MA Stack')) patPts += 3;
-        // Reversal patterns
-        if (s.tags.some(t => t === 'RSI Oversold' || t === 'Stoch Oversold')) patPts += 2;
-        score += Math.min(patPts, 10);
-
-        return { ...s, nextSessionScore: Math.round(score) };
-      })
-      .sort((a, b) => (b as any).nextSessionScore - (a as any).nextSessionScore)
-      .slice(0, 5);
-  }, [stocks]);
-
-  const dailyPicks = useMemo(() => dailyBuyPicks, [dailyBuyPicks]);
 
   const filteredStocks = useMemo(() => {
     let list = [...stocks];
@@ -598,7 +526,7 @@ export default function ScreenerPage() {
       <div className="max-w-[1700px] mx-auto px-4 sm:px-6 py-5 space-y-5">
 
                 {/* ═══ DAILY PICKS ═══ */}
-        {dailyPicks.length > 0 && !loading && (
+        {!dailyPicksLoading && (
           <motion.section {...fadeInUp} transition={{ duration: 0.4 }}>
             <div className="rounded-2xl border border-border/60 bg-card overflow-hidden">
               {/* Header */}
@@ -612,18 +540,24 @@ export default function ScreenerPage() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-bold tracking-tight">أفضل 5 فرص للجلسة القادمة</h2>
-                      {lastUpdated && <span className="text-[10px] text-muted-foreground">{new Date(lastUpdated).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'short' })}</span>}
+                      <h2 className="text-sm font-bold tracking-tight">أقوى 5 إعدادات فنية صعودية</h2>
+                      {dailyPicksMeta?.generatedAt && <span className="text-[10px] text-muted-foreground">{new Date(dailyPicksMeta.generatedAt).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'short' })}</span>}
                     </div>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">أقوى الإشارات الصعودية للجلسة التالية (قوة الإشارة/زخم/اتجاه/حجم)</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">أسهم ذات محاذاة تقنية صعودية (اتجاه/زخم/حجم/أنماط) — ليست توصيات مالية</p>
                   </div>
                 </div>
-                <Badge className="text-[9px] bg-emerald-500 text-white border-emerald-500 h-5 rounded-md px-2 font-bold gap-1">
-                  <TrendingUp className="w-2.5 h-2.5" />{dailyPicks.length} فرصة
-                </Badge>
+                {dailyPicks.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    {dailyPicksMeta && <span className="text-[8px] text-muted-foreground">{dailyPicksMeta.totalCandidates} مرشح</span>}
+                    <Badge className="text-[9px] bg-emerald-500 text-white border-emerald-500 h-5 rounded-md px-2 font-bold gap-1">
+                      <TrendingUp className="w-2.5 h-2.5" />{dailyPicks.length} إعداد
+                    </Badge>
+                  </div>
+                )}
               </div>
 
-              {/* Picks Grid */}
+              {/* Content: Picks or Empty State */}
+              {dailyPicks.length > 0 ? (
               <div className="px-4 sm:px-5 pt-4 pb-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2.5">
                   {dailyPicks.map((s, i) => {
@@ -634,7 +568,7 @@ export default function ScreenerPage() {
                     const tp3 = s.takeProfits[2];
                     const rrColor = s.riskReward >= 2 ? 'text-emerald-600' : s.riskReward >= 1 ? 'text-amber-500' : 'text-red-500';
                     const rrBg = s.riskReward >= 2 ? 'bg-emerald-500/10' : s.riskReward >= 1 ? 'bg-amber-500/10' : 'text-red-500';
-                    const nss = (s as any).nextSessionScore || 0;
+                    const nss = s.nextSessionScore || 0;
                     const nssLabel = nss >= 75 ? 'قوية جداً' : nss >= 55 ? 'قوية' : 'متوسطة';
                     const nssColor = nss >= 75 ? 'text-emerald-600 bg-emerald-500/10' : nss >= 55 ? 'text-amber-600 bg-amber-500/10' : 'text-muted-foreground bg-muted';
                     return (
@@ -682,6 +616,15 @@ export default function ScreenerPage() {
                               <span className={["text-[7px] font-bold px-1.5 py-0.5 rounded leading-none", nssColor].join(' ')}>{nss}%</span>
                             </div>
                           </div>
+
+                          {/* Rationale Tags (explainability) */}
+                          {s.topRationale && s.topRationale.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {s.topRationale.map((r, ri) => (
+                                <span key={ri} className="text-[7px] font-medium text-emerald-600/80 dark:text-emerald-400/80 bg-emerald-500/[0.07] border border-emerald-500/10 px-1.5 py-0.5 rounded-md">{r}</span>
+                              ))}
+                            </div>
+                          )}
 
                           {/* Entry: Smart price with strategy */}
                           <div className="rounded-lg bg-blue-500/[0.06] border border-blue-500/10 px-2.5 py-2">
@@ -747,6 +690,7 @@ export default function ScreenerPage() {
                               <div className={["flex items-center gap-0.5 px-1.5 py-0.5 rounded font-bold", rrColor, rrBg].join(' ')}>
                                 <Gauge className="w-2 h-2" />{s.riskReward.toFixed(1)}:1
                               </div>
+                              <span className="text-[7px] text-muted-foreground">{nssLabel}</span>
                             </div>
                             <span className="text-[9px] text-muted-foreground/50 group-hover:text-muted-foreground transition-colors flex items-center gap-0.5">التفاصيل <ChevronRight className="w-2.5 h-2.5" /></span>
                           </div>
@@ -755,6 +699,25 @@ export default function ScreenerPage() {
                     );
                   })}
                 </div>
+              </div>
+              ) : (
+                /* ── Empty State (P2-1 fix) ── */
+                <div className="px-4 sm:px-5 py-10">
+                  <div className="flex flex-col items-center justify-center text-center">
+                    <div className="w-12 h-12 rounded-2xl bg-muted/50 flex items-center justify-center mb-3">
+                      <Activity className="w-6 h-6 text-muted-foreground/40" />
+                    </div>
+                    <p className="text-sm font-medium text-muted-foreground">لا توجد إعدادات فنية صعودية قوية اليوم</p>
+                    <p className="text-[11px] text-muted-foreground/60 mt-1.5 max-w-sm">لم تلتقِ أي أسهم بمعايير المحاذاة الفنية الصعودية (ثقة ≥ 40، مخاطرة:عائد ≥ 1.5، RSI ≤ 75). جرّب تغيير الإطار الزمني أو راجع البيانات لاحقاً.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Disclaimer footer */}
+              <div className="px-4 sm:px-5 py-2 border-t border-border/30 bg-muted/20">
+                <p className="text-[8px] text-muted-foreground/50 text-center">
+                  هذا الترتيب مبني على محاذاة المؤشرات الفنية فقط وليس مدعوماً بنتائج تاريخية مُتحقَّق منها. لا يُعدّ توصية مالية. {dailyPicksMeta?.version && `v${dailyPicksMeta.version}`}
+                </p>
               </div>
 
             </div>
