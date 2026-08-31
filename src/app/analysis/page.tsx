@@ -152,7 +152,7 @@ export default function ScreenerPage() {
   // ── Daily Picks state (server-computed) ──
   const [dailyPicks, setDailyPicks] = useState<DailyPick[]>([]);
   const [dailyPicksLoading, setDailyPicksLoading] = useState(true);
-  const [dailyPicksMeta, setDailyPicksMeta] = useState<{ totalCandidates: number; version: string; generatedAt: string; disclaimer: string } | null>(null);
+  const [dailyPicksMeta, setDailyPicksMeta] = useState<{ totalCandidates: number; version: string; generatedAt: string; disclaimer: string; batchDate?: string; diversity?: { sectorDistribution: Record<string, number>; concentrationRatio: number; sectorCount: number; isConcentrated: boolean } } | null>(null);
 
   const fetchDailyPicks = useCallback(async () => {
     setDailyPicksLoading(true);
@@ -166,6 +166,8 @@ export default function ScreenerPage() {
         version: data._meta?.scoringVersion,
         generatedAt: data.generatedAt,
         disclaimer: data._meta?.disclaimer,
+        batchDate: data._meta?.batchDate,
+        diversity: data.diversity,
       });
     } catch { /* silent — picks are supplementary, not critical */ }
     finally { setDailyPicksLoading(false); }
@@ -543,7 +545,10 @@ export default function ScreenerPage() {
                       <h2 className="text-sm font-bold tracking-tight">أقوى 5 إعدادات فنية صعودية</h2>
                       {dailyPicksMeta?.generatedAt && <span className="text-[10px] text-muted-foreground">{new Date(dailyPicksMeta.generatedAt).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'short' })}</span>}
                     </div>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">أسهم ذات محاذاة تقنية صعودية (اتجاه/زخم/حجم/أنماط) — ليست توصيات مالية</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">أسهم ذات محاذاة تقنية صعودية (اتجاه/زخم/حجم/أنماط) — ليست توصية مالية</p>
+                    {dailyPicksMeta?.diversity?.isConcentrated && (
+                      <p className="text-[9px] text-amber-500 mt-0.5">تحذير تركز: {Object.entries(dailyPicksMeta.diversity.sectorDistribution)[0]?.[0]} ({Math.round(Object.entries(dailyPicksMeta.diversity.sectorDistribution)[0]?.[1] / dailyPicks.length * 100)}%) — راجع التباين القطاعي</p>
+                    )}
                   </div>
                 </div>
                 {dailyPicks.length > 0 && (
@@ -716,7 +721,7 @@ export default function ScreenerPage() {
               {/* Disclaimer footer */}
               <div className="px-4 sm:px-5 py-2 border-t border-border/30 bg-muted/20">
                 <p className="text-[8px] text-muted-foreground/50 text-center">
-                  هذا الترتيب مبني على محاذاة المؤشرات الفنية فقط وليس مدعوماً بنتائج تاريخية مُتحقَّق منها. لا يُعدّ توصية مالية. {dailyPicksMeta?.version && `v${dailyPicksMeta.version}`}
+                  هذا الترتيب مبني على محاذاة المؤشرات الفنية فقط وليس مدعوماً بنتائج تاريخية مُتحقَّق منها. لا يُعدّ توصية مالية. {dailyPicksMeta?.version && `v${dailyPicksMeta.version}`} {dailyPicksMeta?.batchDate && `| دفعة: ${dailyPicksMeta.batchDate}`} {dailyPicksMeta?.diversity && `| ${dailyPicksMeta.diversity.sectorCount} قطاعات`}
                 </p>
               </div>
 

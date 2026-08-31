@@ -55,3 +55,48 @@ model Transaction {
   @@index([holdingId])
   @@index([date])
 }
+
+// ── Daily Picks Persistence (P0-3 from audit) ─────────────────
+// Stores each daily picks batch for validation, monitoring, and A/B testing.
+// One row per pick per batch — a batch of 5 picks = 5 rows with same batchId.
+
+model DailyPickBatch {
+  id              String   @id @default(cuid())
+  batchDate       String   // ISO date string "YYYY-MM-DD" — the trading day this batch is for
+  timeframe       String   @default("daily") // daily | weekly | monthly
+  version         String   // scoring version from DAILY_PICKS_VERSION
+  totalCandidates Int      @default(0) // how many stocks passed filters
+  totalUniverse   Int      @default(0) // total stocks evaluated
+  sectorDistJson  String   @default("{}") // JSON: sector distribution of picks
+  dataCompleteness Float   @default(0) // % of stocks with valid data when batch was computed
+  createdAt       DateTime @default(now())
+
+  picks           DailyPickRecord[]
+
+  @@index([batchDate])
+  @@index([createdAt])
+}
+
+model DailyPickRecord {
+  id          String   @id @default(cuid())
+  batchId     String
+  rank        Int      // 1-5
+  symbol      String
+  name        String
+  sector      String
+  signal      String   // Buy | Strong Buy
+  confidence  Float
+  nextSessionScore Int  // our composite score
+  scoreBreakdownJson String // JSON: {signal, trend, momentum, volume, riskReward, pattern, total}
+  entryPrice  Float
+  stopLoss    Float
+  riskReward  Float
+  closePrice  Float    // price at time of computation
+  topRationaleJson String // JSON: array of Arabic rationale strings
+
+  batch       DailyPickBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@index([symbol])
+  @@index([rank])
+}
