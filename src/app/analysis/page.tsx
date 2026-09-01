@@ -196,6 +196,27 @@ export default function ScreenerPage() {
 
   useEffect(() => { fetchDailyPicks(); }, [fetchDailyPicks]);
 
+  const handleRecompute = useCallback(async () => {
+    setDailyPicksLoading(true);
+    try {
+    const res = await fetch(`/api/analysis/daily-picks?timeframe=${timeframe}&force=true`);
+      if (!res.ok) throw new Error('fail');
+      const data = await res.json();
+      setDailyPicks((data.picks || []).filter((p: DailyPick) => !p.isNextInLine));
+      setNextInLine((data.nextInLine || []).filter((p: DailyPick) => p.isNextInLine));
+      setDailyPicksMeta({
+        fundamentalPass: data.fundamentalPass || 0, technicalPass: data.technicalPass || 0,
+        totalUniverse: data.totalUniverse || 0, version: data._meta?.scoringVersion,
+        generatedAt: data.generatedAt, disclaimer: data._meta?.disclaimer,
+        batchDate: data._meta?.batchDate, countNote: data.countNote || '',
+        methodology: data._meta?.methodology, marketContext: data.marketContext,
+        dataQuality: data.dataQuality, diversity: data.diversity,
+      });
+      toast.success('تم إعادة حساب الدفعة بنجاح');
+    } catch { toast.error('فشل إعادة حساب الدفعة'); }
+    finally { setDailyPicksLoading(false); }
+  }, [timeframe]);
+
   const fetchScreener = useCallback(async () => {
     setLoading(true);
     try {
@@ -583,6 +604,9 @@ export default function ScreenerPage() {
                       </span>
                     )}
                     <span className="text-[8px] text-muted-foreground">{dailyPicksMeta.fundamentalPass} أساسي | {dailyPicksMeta.technicalPass} فني</span>
+                    <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg hover:bg-muted/80 text-muted-foreground/60" onClick={handleRecompute}><RefreshCw className="w-3.5 h-3.5" /></Button>
+                    </TooltipTrigger><TooltipContent>إعادة حساب الدفعة</TooltipContent></Tooltip></TooltipProvider>
                     <Badge className="text-[9px] bg-emerald-500 text-white border-emerald-500 h-5 rounded-md px-2 font-bold gap-1">
                       <TrendingUp className="w-2.5 h-2.5" />{dailyPicks.length} اختيارات
                     </Badge>
@@ -1257,6 +1281,57 @@ export default function ScreenerPage() {
   );
 }
 
+// ── Track Record Display (B.3) ──
+function TrackRecordDisplay({ batchDate }: { batchDate?: string }) {
+  const [trackData, setTrackData] = useState<{ hitRate: number | null; avgReturn: number | null; totalBatches: number; note: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!batchDate) return;
+    let cancelled = false;
+    fetch('/api/analysis/daily-picks/monitor?days=30')
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        setTrackData({
+          hitRate: data.outcomes?.avgHitRate,
+          avgReturn: data.outcomes?.avgReturn,
+          totalBatches: data.outcomes?.totalBatches || 0,
+          note: data.outcomes?.note,
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [batchDate]);
+
+  if (!trackData || !trackData.hitRate) return null;
+  const { hitRate, avgReturn, totalBatches, note } = trackData;
+  return (
+    <div className="px-4 py-3 space-y-2">
+      <div className="flex items-center gap-3 text-[10px]">
+        <div className="flex items-center gap-1.5">
+          <div className={"w-16 h-1 rounded-full overflow-hidden bg-muted/30 " +
+            (hitRate >= 60 ? 'bg-emerald-500' : hitRate >= 40 ? 'bg-amber-500' : 'bg-red-400') +
+            ' transition-all duration-500'} style={{ width: Math.min(hitRate || 0, 100) + '%' }} />
+          <span className="font-bold">{hitRate != null ? hitRate.toFixed(1) : '—'}%</span>
+          <span className="text-muted-foreground">نسبة النجاح</span>
+        </div>
+        <Separator orientation="vertical" className="h-4" />
+        <div className="flex items-center gap-1.5">
+          <div className={"w-16 h-1 rounded-full overflow-hidden bg-muted/30 " +
+            (avgReturn >= 0 ? 'bg-emerald-500' : 'bg-red-400') +
+            ' transition-all duration-500'} style={{ width: Math.min(Math.abs(avgReturn || 0) * 8, 100) + '%' }} />
+          <span className={"font-bold " + (avgReturn >= 0 ? 'text-emerald-600' : 'text-red-500')}>{avgReturn != null ? (avgReturn >= 0 ? '+' : '') + avgReturn.toFixed(2) + '%' : '—'}</span>
+          <span className="text-muted-foreground">متوسط العائد</span>
+        </div>
+        <Separator orientation="vertical" className="h-4" />
+        <div className="text-[9px] text-muted-foreground/50">
+          <span>{totalBatches} دفعة مُقيَّمت</span>
+          {note && <span className="text-amber-500"> — {note}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
 // ── Helper Component: Indicator Row ──
 function IndRow({ label, value, extra, color }: { label: string; value: string; extra?: string; color?: string }) {
   return (

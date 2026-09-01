@@ -1,4 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/analysis/daily-picks/compute",
+      "schedule": "15 15 * * 1-5"
+    }
+  ]
 }
