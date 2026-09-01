@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
     if (!force) {
       const existing = await prisma.dailyPickBatch.findFirst({
         where: { batchDate, timeframe },
+        include: { picks: true },
       });
       if (existing) {
         return NextResponse.json({
@@ -84,11 +85,11 @@ export async function POST(request: NextRequest) {
     let marketContext: MarketContext | null = null;
     try {
       const quotes = await fetchQuotesLive(['CASE:EGX30']);
-      const egx30 = quotes['CASE:EGX30'];
-      if (egx30?.price) {
+      const egx30 = quotes['CASE:EGX30'] || quotes['EGX30'];
+      if (egx30?.close) {
         const changePct = egx30.changePercent || 0;
         marketContext = {
-          egx30Level: egx30.price,
+          egx30Level: egx30.close,
           egx30ChangePct: changePct,
           marketVolatility: Math.abs(changePct) > 2 ? 'high' : Math.abs(changePct) > 0.8 ? 'medium' : 'low',
           regime: changePct > 0.5 ? 'bullish' : changePct < -0.5 ? 'bearish' : 'ranging',

@@ -603,7 +603,7 @@ export default function ScreenerPage() {
                         EGX30 {dailyPicksMeta.marketContext.egx30ChangePct >= 0 ? '+' : ''}{dailyPicksMeta.marketContext.egx30ChangePct.toFixed(1)}%
                       </span>
                     )}
-                    <span className="text-[8px] text-muted-foreground">{dailyPicksMeta.fundamentalPass} أساسي | {dailyPicksMeta.technicalPass} فني</span>
+                    <span className="text-[8px] text-muted-foreground">{dailyPicksMeta?.fundamentalPass ?? 0} أساسي | {dailyPicksMeta?.technicalPass ?? 0} فني</span>
                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
                       <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg hover:bg-muted/80 text-muted-foreground/60" onClick={handleRecompute}><RefreshCw className="w-3.5 h-3.5" /></Button>
                     </TooltipTrigger><TooltipContent>إعادة حساب الدفعة</TooltipContent></Tooltip></TooltipProvider>
@@ -1318,9 +1318,9 @@ function TrackRecordDisplay({ batchDate }: { batchDate?: string }) {
         <Separator orientation="vertical" className="h-4" />
         <div className="flex items-center gap-1.5">
           <div className={"w-16 h-1 rounded-full overflow-hidden bg-muted/30 " +
-            (avgReturn >= 0 ? 'bg-emerald-500' : 'bg-red-400') +
+            ((avgReturn ?? 0) >= 0 ? 'bg-emerald-500' : 'bg-red-400') +
             ' transition-all duration-500'} style={{ width: Math.min(Math.abs(avgReturn || 0) * 8, 100) + '%' }} />
-          <span className={"font-bold " + (avgReturn >= 0 ? 'text-emerald-600' : 'text-red-500')}>{avgReturn != null ? (avgReturn >= 0 ? '+' : '') + avgReturn.toFixed(2) + '%' : '—'}</span>
+          <span className={"font-bold " + ((avgReturn ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500')}>{avgReturn != null ? (avgReturn >= 0 ? '+' : '') + avgReturn.toFixed(2) + '%' : '—'}</span>
           <span className="text-muted-foreground">متوسط العائد</span>
         </div>
         <Separator orientation="vertical" className="h-4" />

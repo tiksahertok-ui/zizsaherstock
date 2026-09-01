@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: 'no_pending_batches', message: 'No pending batches to evaluate' });
     }
 
-    const results = [];
+    const results: Array<{ batchDate: string; batchId: string; evaluatedAt: string; evaluatedCount: number; hitRate: number; avgReturn: number; totalReturn: number }> = [];
 
     for (const batch of batches) {
       const symbols = batch.picks.map(p => p.symbol);
@@ -73,16 +73,16 @@ export async function POST(request: NextRequest) {
 
       for (const pick of batch.picks) {
         const q = quotes[pick.symbol];
-        if (!q || !q.price) continue;
+        if (!q || !q.close) continue;
 
         const entryPrice = pick.entryPrice;
-        const openPrice = q.price; // use current price as proxy (intraday would need OHLC)
-        const returnPct = entryPrice > 0 ? ((q.price - entryPrice) / entryPrice) * 100 : 0;
-        const stopHit = q.price <= pick.stopLoss;
-        const tp1Hit = pick.takeProfit1 ? q.price >= pick.takeProfit1 : false;
+        const openPrice = q.close; // use current close as proxy (intraday would need OHLC)
+        const returnPct = entryPrice > 0 ? ((q.close - entryPrice) / entryPrice) * 100 : 0;
+        const stopHit = q.close <= pick.stopLoss;
+        const tp1Hit = pick.takeProfit1 ? q.close >= pick.takeProfit1 : false;
 
         let note = '';
-        if (stopHit) note = `وقف خسارة عند ${q.price.toFixed(2)}`;
+        if (stopHit) note = `وقف خسارة عند ${q.close.toFixed(2)}`;
         else if (tp1Hit) note = `وصل المستهدف الأول ${pick.takeProfit1?.toFixed(2)}`;
         else note = `عائد ${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%`;
 
@@ -90,7 +90,7 @@ export async function POST(request: NextRequest) {
           where: { id: pick.id },
           data: {
             nextDayOpen: openPrice,
-            nextDayClose: q.price,
+            nextDayClose: q.close,
             realizedReturn: Math.round(returnPct * 100) / 100,
             stopHit,
             tp1Hit,

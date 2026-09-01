@@ -56,11 +56,11 @@ async function fetchMarketContext(): Promise<MarketContext | null> {
   try {
     // EGX30 index ticker on TradingView
     const quotes = await fetchQuotesLive(['CASE:EGX30']);
-    const egx30 = quotes['CASE:EGX30'];
-    if (!egx30 || !egx30.price) return null;
+    const egx30 = quotes['CASE:EGX30'] || quotes['EGX30'];
+    if (!egx30 || !egx30.close) return null;
     const changePct = egx30.changePercent || 0;
     return {
-      egx30Level: egx30.price,
+      egx30Level: egx30.close,
       egx30ChangePct: changePct,
       marketVolatility: Math.abs(changePct) > 2 ? 'high' : Math.abs(changePct) > 0.8 ? 'medium' : 'low',
       regime: changePct > 0.5 ? 'bullish' : changePct < -0.5 ? 'bearish' : 'ranging',
@@ -236,7 +236,7 @@ export async function GET(request: NextRequest) {
       const persisted = await loadPersistedBatch(timeframe);
       if (persisted && persisted.picks.length >= 0) {
         log.log('info', 'DailyPicks', `DB cache hit for ${getTodayDate()}`);
-        const maxSector = Math.max(...Object.values(persisted.sectorDistribution), 0);
+        const maxSector = Math.max(...Object.values(persisted.sectorDistribution as Record<string, number>), 0);
         const conc = persisted.picks.length > 0 ? maxSector / persisted.picks.length : 0;
         return new NextResponse(JSON.stringify({
           ...persisted,

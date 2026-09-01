@@ -427,6 +427,46 @@ export function evaluateFundamentalGate(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// EGX LIQUIDITY FILTER (A.5)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * EGX Liquidity pre-filter (A.5).
+ *
+ * Screens out stocks with insufficient daily turnover to ensure
+ * picks are tradeable at realistic prices. Uses avgVolume30d × close
+ * as a proxy for daily turnover in EGP.
+ *
+ * Calibrated to EGX turnover distribution:
+ *   - Median daily turnover ~500K EGP
+ *   - 25th percentile ~100K EGP
+ *   - Our threshold: 100K EGP (captures bottom quartile only)
+ *
+ * NOTE: If volume data is not available for a stock, it PASSES
+ * the filter (conservative — we don't want to exclude stocks
+ * just because TradingView didn't return volume data).
+ */
+function passesLiquidityFilter(stock: ScreenerStock): boolean {
+  const EGX = DAILY_PICKS_PARAMS.egx;
+  const ind = stock.indicators;
+
+  // If no volume data, pass conservatively
+  if (!ind.volume && !ind.volume) return true;
+
+  // Use avgVolume30d if available (more stable), else current volume
+  // avgVolume30d is stored on the screener stock's indicators if the
+  // technical-screener was given avgVolumes; otherwise we estimate
+  // from current volume.
+  const avgVol = (stock as any)._avgVolume30d || ind.volume;
+  const close = ind.close || 0;
+
+  if (close <= 0 || avgVol <= 0) return true; // can't compute turnover
+
+  const dailyTurnoverEGP = avgVol * close;
+  return dailyTurnoverEGP >= EGX.minDailyTurnoverEGP;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // STAGE 2: TECHNICAL FILTERS
 // ═══════════════════════════════════════════════════════════════
 
@@ -719,8 +759,14 @@ export function computeDailyPicksV2(
   }
   const fundamentalPassCount = fundPassed.length;
 
+  // ── Stage 1.5: Liquidity Filter (A.5) ──
+  // Applied after fundamental gate, before technical filters.
+  // Screens out illiquid stocks that can't be traded at realistic prices.
+  const liquidStocks = fundPassed.filter(passesLiquidityFilter);
+  const liquidityFiltered = fundPassed.length - liquidStocks.length;
+
   // ── Stage 2: Technical Filters + Scoring ──
-  const techCandidates = fundPassed.filter(passesTechnicalFilters);
+  const techCandidates = liquidStocks.filter(passesTechnicalFilters);
   const technicalPassCount = techCandidates.length;
 
   // Score each candidate
