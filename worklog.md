@@ -65,3 +65,25 @@ const nearestResistance = resistancesAbove.length > 0
 ### Verification
 - `npx next build` passes with zero errors
 - All routes compile cleanly
+---
+Task ID: 1
+Agent: main
+Task: Daily Picks Flagship Feature Rebuild (Implementation Brief A.1-A.6, B.1-B.7)
+
+Work Log:
+- Updated Prisma schema with: marketContextJson, outcome tracking fields (nextDayOpen/Close, realizedReturn, stopHit, tp1Hit), fundamental gate fields, nextInLine flag, pipeline metrics (fundamentalPass, technicalPass), paramsSnapshotJson, pickCountNote
+- Created daily-picks-v2.ts: two-stage pipeline (fundamental gate → technical scoring), 7 explicit fundamental checks (profitability, solvency, cash flow, revenue, relative valuation, data quality, EGP currency), multicollinearity cap on MA signals, EGX price limit bounding, sector concentration guard (B.2), flexible count with explanatory note (B.1), next-in-line transparency (B.4), versioned parameters (B.7)
+- Rebuilt daily-picks API route: fetches fundamentals for gate, fetches EGX30 for market context (B.5), persists full pipeline metrics, supports v1 shadow mode (?method=v1) and A/B ranking (?ranking=confidence), backward compatible with v1 engine
+- Created compute endpoint (POST /compute): for external cron scheduling, idempotent (skips if batch exists), secret-based auth
+- Created history endpoint (GET /history): date range browsing, single date lookup, next-in-line inclusion, outcome data
+- Created outcomes endpoint (POST /outcomes): evaluates past picks against realized prices, updates SL/TP hit status, computes hit rate and avg return
+- Updated monitor endpoint: pipeline funnel metrics (fundamentalPass, technicalPass), outcome tracking KPIs, data completeness split (tech vs fund)
+- Rebuilt UI: flagship presentation with fundamental gate indicator (green/red checkmark with tooltip), market context chip (EGX30 change + regime), pipeline funnel counts, next-in-line expandable section (B.4), methodology accordion (A.6), honest disclaimer (B.6), B.1 flexible count note
+
+Stage Summary:
+- Version bump: v1.0.0 → v2.0.0
+- 6 new/modified files in the daily-picks system
+- Schema: 2 new fields on DailyPickBatch, 7 new fields on DailyPickRecord
+- All 48 v1 unit tests still pass
+- Build successful
+- All A.x and B.x requirements implemented except: walk-forward statistical validation (needs historical price data store), multi-channel delivery (email/push), personalization UI toggle

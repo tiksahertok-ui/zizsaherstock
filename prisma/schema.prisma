@@ -27,8 +27,8 @@ model Holding {
   shares       Int      // Number of shares held (positive)
   avgCost      Float    // Weighted average cost per share (EGP)
   purchaseDate DateTime @default(now()) // Date the position was purchased
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -56,47 +56,109 @@ model Transaction {
   @@index([date])
 }
 
-// ── Daily Picks Persistence (P0-3 from audit) ─────────────────
-// Stores each daily picks batch for validation, monitoring, and A/B testing.
-// One row per pick per batch — a batch of 5 picks = 5 rows with same batchId.
+// ── Daily Picks Persistence — Flagship Feature v2 ─────────
+//
+// DESIGN PRINCIPLES (from Implementation Brief):
+//   1. Append-only history: every batch is immutable once created
+//   2. Two-stage pipeline: fundamental gate → technical ranking
+//   3. Versioned parameters: every batch attributable to exact config
+//   4. Market context logged: EGX30 level, volatility, regime
+//   5. Outcome tracking: next-session realized returns for validation
+//   6. Flexible count: allow <5 picks with explanation (B.1)
+//   7. Next-in-line: ranks 6-10 stored for transparency (B.4)
+//
+// SETTLEMENT NOTE (A.5):
+//   EGX settlement is T+2. Sell-side signals are labeled
+//   "reduce/avoid" not actionable short opportunities.
+//
+// PRICE LIMITS (A.5):
+//   EGX regular session: +/-16% daily price limit
+//   Circuit breaker: 5% halt (separate mechanism)
+//   Stop-loss/take-profit are bounded by these rules.
 
 model DailyPickBatch {
   id              String   @id @default(cuid())
-  batchDate       String   // ISO date string "YYYY-MM-DD" — the trading day this batch is for
+  batchDate       String   // ISO date "YYYY-MM-DD" — the trading day this batch is for
   timeframe       String   @default("daily") // daily | weekly | monthly
-  version         String   // scoring version from DAILY_PICKS_VERSION
-  totalCandidates Int      @default(0) // how many stocks passed filters
-  totalUniverse   Int      @default(0) // total stocks evaluated
-  sectorDistJson  String   @default("{}") // JSON: sector distribution of picks
-  dataCompleteness Float   @default(0) // % of stocks with valid data when batch was computed
+  version         String   // scoring version from DAILY_PICKS_VERSION (B.7)
+
+  // Pipeline metrics
+  totalUniverse   Int      @default(0) // total stocks evaluated by screener
+  fundamentalPass Int      @default(0) // stocks passing fundamental quality gate (A.2)
+  technicalPass   Int      @default(0) // stocks passing technical filters (signal, R:R, RSI, MACD)
+  finalPicks      Int      @default(0) // actual picks returned (may be <5, B.1)
+  pickCountNote   String   @default("") // explanation if <5 picks (e.g. "only 3 names met full criteria")
+
+  // Data quality
+  dataCompleteness Float   @default(0) // % of stocks with valid technical data
+  fundamentalCompleteness Float @default(0) // % of stocks with valid fundamental data
+
+  // Market context (B.5)
+  marketContextJson String  @default("{}") // JSON: {egx30Level, egx30Change, marketVolatility, regime, ...}
+
+  // Sector diversity
+  sectorDistJson  String   @default("{}") // JSON: sector distribution of final picks
+
+  // Scoring config snapshot (B.7)
+  paramsSnapshotJson String @default("{}") // JSON: full parameter set used for this batch
+
+  // Outcome tracking (A.4)
+  outcomeJson     String   @default("{}") // JSON: {evaluatedAt, hitRate, avgReturn, ...}
+  outcomeStatus   String   @default("pending") // pending | evaluated | expired
+
   createdAt       DateTime @default(now())
 
   picks           DailyPickRecord[]
 
   @@index([batchDate])
   @@index([createdAt])
+  @@index([version])
+  @@index([outcomeStatus])
 }
 
 model DailyPickRecord {
   id          String   @id @default(cuid())
   batchId     String
-  rank        Int      // 1-5
+  rank        Int      // 1-5 (main picks) or 6-10 (next-in-line, B.4)
+  isNextInLine Boolean  @default(false) // true for ranks 6-10
+
   symbol      String
   name        String
   sector      String
+
+  // Signal info
   signal      String   // Buy | Strong Buy
   confidence  Float
-  nextSessionScore Int  // our composite score
+  nextSessionScore Int  // our composite technical score (0-100)
   scoreBreakdownJson String // JSON: {signal, trend, momentum, volume, riskReward, pattern, total}
+  topRationaleJson String // JSON: array of Arabic rationale strings
+
+  // Fundamental gate results (A.2)
+  fundamentalGateJson String @default("{}") // JSON: {passed, checks: {...}, overallScore}
+
+  // Price levels
+  closePrice  Float    // price at time of computation
   entryPrice  Float
   stopLoss    Float
+  takeProfit1 Float?
+  takeProfit2 Float?
+  takeProfit3 Float?
   riskReward  Float
-  closePrice  Float    // price at time of computation
-  topRationaleJson String // JSON: array of Arabic rationale strings
+
+  // Outcome tracking (A.4) — filled by evaluation job
+  nextDayOpen  Float?   // opening price of next session
+  nextDayClose Float?   // closing price of next session
+  maxPrice     Float?   // highest price in next session (for TP hit detection)
+  minPrice     Float?   // lowest price in next session (for SL hit detection)
+  realizedReturn Float? // % return from entry to next close
+  stopHit      Boolean  @default(false)
+  tp1Hit       Boolean  @default(false)
+  outcomeNote  String   @default("") // e.g. "hit TP1 at 12.50"
 
   batch       DailyPickBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@index([batchId])
   @@index([symbol])
   @@index([rank])
+  @@index([isNextInLine])
 }
