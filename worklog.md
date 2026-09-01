@@ -87,3 +87,22 @@ Stage Summary:
 - All 48 v1 unit tests still pass
 - Build successful
 - All A.x and B.x requirements implemented except: walk-forward statistical validation (needs historical price data store), multi-channel delivery (email/push), personalization UI toggle
+---
+Task ID: 2
+Agent: main
+Task: Wire EGX liquidity filter + fix TS errors across Daily Picks pipeline
+
+Work Log:
+- Added passesLiquidityFilter() to daily-picks-v2.ts: uses avgVolume30d × close as daily turnover proxy, calibrated to EGX 25th percentile (100K EGP), conservative pass when volume data unavailable
+- Integrated liquidity filter into pipeline between fundamental gate (Stage 1) and technical filters (Stage 2)
+- Fixed QuoteData interface mismatch: .price → .close in outcomes route (3 locations) and compute route (2 locations)
+- Fixed EGX30 ticker lookup: added 'EGX30' fallback when 'CASE:EGX30' key not found in quotes map
+- Fixed null safety in analysis page: dailyPicksMeta?.fundamentalPass, dailyPicksMeta?.technicalPass, (avgReturn ?? 0) comparisons
+- Fixed TypeScript 'never[]' inference: explicitly typed outcomes results array
+- Fixed Prisma relation access: added `include: { picks: true }` to compute route's idempotency check
+- Fixed Object.values unknown[] cast: added `as Record<string, number>` for persisted sector distribution
+
+Stage Summary:
+- Zero new TypeScript errors introduced (verified with tsc --noEmit)
+- Next.js build passes cleanly
+- All changes pushed to GitHub (commit 0f53851)
