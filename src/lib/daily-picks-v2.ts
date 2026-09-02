@@ -895,6 +895,213 @@ export function computeDailyPicksWithMethod(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// WALK-FORWARD VALIDATION (A.4)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Walk-Forward Validation — Score calibration infrastructure.
+ *
+ * This module provides utilities for evaluating the scoring model's
+ * predictive power using step-wise out-of-sample testing.
+ *
+ * IMPORTANT: This is the INFRASTRUCTURE, not the actual backtest.
+ * A proper walk-forward backtest requires:
+ *   - Historical price data (OHLCV) for EGX stocks
+ *   - Parameterized scoring function (already done via DAILY_PICKS_PARAMS)
+ *   - Rolling window evaluation
+ *
+ * Current capabilities:
+ *   - Outcome evaluation (realized returns, SL/TP hit detection)
+ *   - Score-outcome correlation analysis
+ *   - Hit rate and average return computation
+ *   - Score calibration metrics (does higher score → better returns?)
+ */
+
+export interface OutcomeEvaluation {
+  batchDate: string;
+  batchId: string;
+  picks: Array<{
+    symbol: string;
+    rank: number;
+    entryPrice: number;
+    nextDayClose: number;
+    realizedReturn: number;
+    stopHit: boolean;
+    tp1Hit: boolean;
+    nextSessionScore: number;
+    scoreBreakdown: DailyPickScoreBreakdown;
+  }>;
+  hitRate: number;        // % of picks with positive return
+  avgReturn: number;      // average % return across picks
+  totalReturn: number;    // sum of all returns
+  topPickReturn: number;  // return of rank #1 pick
+  winCount: number;
+  lossCount: number;
+  evaluatedAt: string;
+}
+
+export interface WalkForwardMetrics {
+  /** Number of evaluated batches */
+  evaluatedBatches: number;
+  /** Average hit rate across all batches */
+  avgHitRate: number;
+  /** Average return per pick across all batches */
+  avgReturnPerPick: number;
+  /** Cumulative return if equal-weighted across all picks */
+  cumulativeReturn: number;
+  /** Correlation: does higher score → better next-day return? */
+  scoreReturnCorrelation: number | null;
+  /** Score tiers: returns grouped by score bucket */
+  scoreTiers: Array<{
+    min: number; max: number; avgReturn: number; hitRate: number; count: number;
+  }>;
+  /** Sector-level hit rates */
+  sectorHitRates: Record<string, { hitRate: number; avgReturn: number; count: number }>;
+  /** Best performing rank position */
+  bestRank: number;
+  /** Consistency: % of batches with positive avg return */
+  consistencyPct: number;
+  /** Note about statistical significance */
+  significanceNote: string;
+}
+
+/**
+ * Compute walk-forward metrics from a list of evaluated batches.
+ * This is the core analysis function for A.4 validation.
+ *
+ * @param evaluations - List of outcome evaluations from historical batches
+ * @returns WalkForwardMetrics with calibration insights
+ */
+export function computeWalkForwardMetrics(
+  evaluations: OutcomeEvaluation[],
+): WalkForwardMetrics {
+  if (evaluations.length === 0) {
+    return {
+      evaluatedBatches: 0, avgHitRate: 0, avgReturnPerPick: 0,
+      cumulativeReturn: 0, scoreReturnCorrelation: null,
+      scoreTiers: [], sectorHitRates: {}, bestRank: 0,
+      consistencyPct: 0,
+      significanceNote: 'لا توجد بيانات كافية — تحتاج 10 دفعات على الأقل',
+    };
+  }
+
+  // Flatten all picks across all batches
+  const allPicks = evaluations.flatMap(e =>
+    e.picks.map(p => ({ ...p, batchDate: e.batchDate }))
+  );
+
+  if (allPicks.length === 0) {
+    return {
+      evaluatedBatches: evaluations.length, avgHitRate: 0, avgReturnPerPick: 0,
+      cumulativeReturn: 0, scoreReturnCorrelation: null,
+      scoreTiers: [], sectorHitRates: {}, bestRank: 0,
+      consistencyPct: 0,
+      significanceNote: 'لا توجد اختيارات مُقيَّمة',
+    };
+  }
+
+  // ── Hit rate & returns ──
+  const wins = allPicks.filter(p => p.realizedReturn > 0);
+  const losses = allPicks.filter(p => p.realizedReturn <= 0);
+  const hitRate = (wins.length / allPicks.length) * 100;
+  const avgReturn = allPicks.reduce((s, p) => s + p.realizedReturn, 0) / allPicks.length;
+  const cumulativeReturn = allPicks.reduce((s, p) => s + p.realizedReturn, 0);
+
+  // ── Score-Return Correlation (Pearson, simplified) ──
+  const scoreReturnCorrelation = computeCorrelation(
+    allPicks.map(p => p.nextSessionScore),
+    allPicks.map(p => p.realizedReturn),
+  );
+
+  // ── Score Tiers ──
+  const tierDefs = [
+    { min: 0, max: 40, label: '0-40 (ضعيف)' },
+    { min: 40, max: 55, label: '40-55 (متوسط)' },
+    { min: 55, max: 70, label: '55-70 (قوي)' },
+    { min: 70, max: 101, label: '70+ (قوي جداً)' },
+  ];
+
+  const scoreTiers = tierDefs.map(tier => {
+    const tierPicks = allPicks.filter(p => p.nextSessionScore >= tier.min && p.nextSessionScore < tier.max);
+    const tierWins = tierPicks.filter(p => p.realizedReturn > 0);
+    return {
+      ...tier,
+      avgReturn: tierPicks.length > 0 ? tierPicks.reduce((s, p) => s + p.realizedReturn, 0) / tierPicks.length : 0,
+      hitRate: tierPicks.length > 0 ? (tierWins.length / tierPicks.length) * 100 : 0,
+      count: tierPicks.length,
+    };
+  });
+
+  // ── Sector hit rates ──
+  const sectorMap: Record<string, { returns: number[]; hits: number }> = {};
+  for (const p of allPicks) {
+    // sector is not directly on the pick here; we'd need batch context
+    // For now, skip sector breakdown (available in full batch data)
+  }
+
+  // ── Best rank ──
+  const rankReturns: Record<number, number[]> = {};
+  for (const p of allPicks) {
+    if (!rankReturns[p.rank]) rankReturns[p.rank] = [];
+    rankReturns[p.rank].push(p.realizedReturn);
+  }
+  let bestRank = 1;
+  let bestRankAvg = -Infinity;
+  for (const [rank, returns] of Object.entries(rankReturns)) {
+    const avg = returns.reduce((s, r) => s + r, 0) / returns.length;
+    if (avg > bestRankAvg) { bestRankAvg = avg; bestRank = parseInt(rank); }
+  }
+
+  // ── Consistency ──
+  const positiveBatches = evaluations.filter(e => e.avgReturn > 0).length;
+  const consistencyPct = (positiveBatches / evaluations.length) * 100;
+
+  // ── Significance note ──
+  let significanceNote = '';
+  if (evaluations.length < 10) {
+    significanceNote = `تحتاج ${10 - evaluations.length} دفعات إضافية لنتائج إحصائية موثوقة (الحد الأدنى: 10)`;
+  } else if (evaluations.length < 30) {
+    significanceNote = `${evaluations.length} دفعة — نتائج أولية. يُفضل 30+ دفعة لثقة إحصائية أعلى.`;
+  } else {
+    significanceNote = `${evaluations.length} دفعة — مستوى ثقة معقول للنتائج الإحصائية.`;
+  }
+
+  return {
+    evaluatedBatches: evaluations.length,
+    avgHitRate: Math.round(hitRate * 10) / 10,
+    avgReturnPerPick: Math.round(avgReturn * 100) / 100,
+    cumulativeReturn: Math.round(cumulativeReturn * 100) / 100,
+    scoreReturnCorrelation: Math.round(scoreReturnCorrelation * 1000) / 1000,
+    scoreTiers,
+    sectorHitRates: {},
+    bestRank,
+    consistencyPct: Math.round(consistencyPct * 10) / 10,
+    significanceNote,
+  };
+}
+
+/** Simplified Pearson correlation coefficient */
+function computeCorrelation(x: number[], y: number[]): number {
+  const n = x.length;
+  if (n < 3) return 0;
+
+  const meanX = x.reduce((s, v) => s + v, 0) / n;
+  const meanY = y.reduce((s, v) => s + v, 0) / n;
+
+  let sumXY = 0, sumX2 = 0, sumY2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = x[i] - meanX;
+    const dy = y[i] - meanY;
+    sumXY += dx * dy;
+    sumX2 += dx * dx;
+    sumY2 += dy * dy;
+  }
+
+  const denom = Math.sqrt(sumX2 * sumY2);
+  return denom === 0 ? 0 : sumXY / denom;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // PERSONALIZATION (§9 Governance, lightweight)
 // ═══════════════════════════════════════════════════════════════
 

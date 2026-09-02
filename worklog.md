@@ -106,3 +106,24 @@ Stage Summary:
 - Zero new TypeScript errors introduced (verified with tsc --noEmit)
 - Next.js build passes cleanly
 - All changes pushed to GitHub (commit 0f53851)
+---
+Task ID: 3
+Agent: main
+Task: A.4 Walk-Forward Validation Infrastructure + A.6 UI Enhancements
+
+Work Log:
+- Added Walk-Forward Validation module to daily-picks-v2.ts: computeWalkForwardMetrics() with score-return correlation (Pearson), score tier analysis (4 buckets), rank performance, consistency %, statistical significance notes
+- Added OutcomeEvaluation and WalkForwardMetrics types for structured validation data
+- Created track-record API (GET /track-record): returns cumulative performance summary, walk-forward metrics, per-batch outcome history
+- Enhanced compute endpoint: auto-evaluates yesterday's outcomes after computing today's batch (step 7), non-critical failure handling
+- Enhanced outcomes endpoint: improved SL/TP hit detection using high/low prices instead of close-only
+- Added track record badge to UI header: shows hit rate %, tooltip with avg return, consistency, statistical significance
+- Added score breakdown mini-bars to each pick card: 6 color-coded progress bars (signal/trend/momentum/volume/r:r/pattern) with tooltips showing exact scores
+
+Stage Summary:
+- 4 files modified, 1 new file (track-record/route.ts)
+- Walk-forward infrastructure ready for statistical validation once 10+ batches evaluated
+- Track record badge displays automatically after first evaluated batch
+- Score breakdown bars provide transparent scoring visualization (A.6)
+- Outcome evaluation chained into nightly compute cron (A.3 + A.4)
+- Zero TypeScript errors in changed files

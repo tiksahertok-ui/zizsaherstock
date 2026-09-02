@@ -86,14 +86,17 @@ export async function POST(request: NextRequest) {
         else if (tp1Hit) note = `وصل المستهدف الأول ${pick.takeProfit1?.toFixed(2)}`;
         else note = `عائد ${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%`;
 
+        // Also update max/min price for better SL/TP hit detection
         await prisma.dailyPickRecord.update({
           where: { id: pick.id },
           data: {
             nextDayOpen: openPrice,
             nextDayClose: q.close,
+            maxPrice: q.high || q.close,  // high if available from quotes
+            minPrice: q.low || q.close,    // low if available from quotes
             realizedReturn: Math.round(returnPct * 100) / 100,
-            stopHit,
-            tp1Hit,
+            stopHit: (q.low || q.close) <= pick.stopLoss,
+            tp1Hit: pick.takeProfit1 ? (q.high || q.close) >= pick.takeProfit1 : false,
             outcomeNote: note,
           },
         });

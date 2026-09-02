@@ -167,6 +167,10 @@ export default function ScreenerPage() {
   } | null>(null);
   const [showNextInLine, setShowNextInLine] = useState(false);
   const [showMethodology, setShowMethodology] = useState(false);
+  const [trackRecord, setTrackRecord] = useState<{
+    avgHitRate: number | null; avgReturn: number | null; consistency: number | null;
+    evaluatedBatches: number; isStatisticallySignificant: boolean; significanceNote: string;
+  } | null>(null);
 
   const fetchDailyPicks = useCallback(async () => {
     setDailyPicksLoading(true);
@@ -193,6 +197,13 @@ export default function ScreenerPage() {
     } catch { /* silent — picks are supplementary, not critical */ }
     finally { setDailyPicksLoading(false); }
   }, [timeframe]);
+
+  // A.4: Fetch track record in background
+  useEffect(() => {
+    fetch('/api/analysis/daily-picks/track-record?days=90').then(r => r.json()).then(data => {
+      if (data.summary) setTrackRecord(data.summary);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => { fetchDailyPicks(); }, [fetchDailyPicks]);
 
@@ -603,6 +614,23 @@ export default function ScreenerPage() {
                         EGX30 {dailyPicksMeta.marketContext.egx30ChangePct >= 0 ? '+' : ''}{dailyPicksMeta.marketContext.egx30ChangePct.toFixed(1)}%
                       </span>
                     )}
+                    {/* A.4 Track Record Badge */}
+                    {trackRecord && trackRecord.evaluatedBatches > 0 && (
+                      <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                        <span className={"text-[8px] font-medium px-2 py-0.5 rounded-md border flex items-center gap-1 " + (trackRecord.avgHitRate && trackRecord.avgHitRate >= 50 ? 'text-emerald-600 bg-emerald-500/10 border-emerald-500/20' : 'text-amber-600 bg-amber-500/10 border-amber-500/20')}>
+                          <Target className="w-2.5 h-2.5" />{trackRecord.avgHitRate?.toFixed(0)}% نسبة نجاح
+                        </span>
+                      </TooltipTrigger><TooltipContent side="top" className="text-[10px] max-w-[220px]">
+                        <div className="font-semibold mb-1">سجل الأداء ({trackRecord.evaluatedBatches} دفعة)</div>
+                        <div className="text-muted-foreground space-y-0.5">
+                          <div>نسبة النجاح: {trackRecord.avgHitRate?.toFixed(1)}%</div>
+                          <div>متوسط العائد: {trackRecord.avgReturn !== null ? (trackRecord.avgReturn >= 0 ? '+' : '') + trackRecord.avgReturn.toFixed(2) + '%' : 'N/A'}</div>
+                          <div>الاتساق: {trackRecord.consistency?.toFixed(0)}%</div>
+                          {trackRecord.isStatisticallySignificant && <div className="text-emerald-500">نتائج إحصائية موثوقة</div>}
+                          {!trackRecord.isStatisticallySignificant && <div className="text-amber-500">{trackRecord.significanceNote}</div>}
+                        </div>
+                      </TooltipContent></Tooltip></TooltipProvider>
+                    )}
                     <span className="text-[8px] text-muted-foreground">{dailyPicksMeta?.fundamentalPass ?? 0} أساسي | {dailyPicksMeta?.technicalPass ?? 0} فني</span>
                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
                       <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg hover:bg-muted/80 text-muted-foreground/60" onClick={handleRecompute}><RefreshCw className="w-3.5 h-3.5" /></Button>
@@ -721,6 +749,29 @@ export default function ScreenerPage() {
                               <span className="text-[7px] text-muted-foreground">{nssLabel}</span>
                             </div>
                             <span className="text-[9px] text-muted-foreground/50 group-hover:text-muted-foreground transition-colors flex items-center gap-0.5">التفاصيل <ChevronRight className="w-2.5 h-2.5" /></span>
+                          </div>
+                          {/* A.6: Score breakdown mini-bars */}
+                          <div className="grid grid-cols-6 gap-1 pt-1 border-t border-border/20 mt-1">
+                            {[
+                              { key: 'signal', label: 'إشارة', max: 40, val: s.scoreBreakdown.signal, color: 'bg-blue-500' },
+                              { key: 'trend', label: 'اتجاه', max: 20, val: s.scoreBreakdown.trend, color: 'bg-emerald-500' },
+                              { key: 'momentum', label: 'زخم', max: 20, val: s.scoreBreakdown.momentum, color: 'bg-amber-500' },
+                              { key: 'volume', label: 'حجم', max: 15, val: s.scoreBreakdown.volume, color: 'bg-purple-500' },
+                              { key: 'riskReward', label: 'م:ع', max: 10, val: s.scoreBreakdown.riskReward, color: 'bg-cyan-500' },
+                              { key: 'pattern', label: 'أنماط', max: 10, val: s.scoreBreakdown.pattern, color: 'bg-pink-500' },
+                            ].map(d => (
+                              <TooltipProvider key={d.key}><Tooltip><TooltipTrigger asChild>
+                                <div className="flex flex-col items-center gap-0.5 cursor-default">
+                                  <span className="text-[6px] text-muted-foreground/60 leading-none">{d.label}</span>
+                                  <div className="w-full h-1 rounded-full bg-muted/40 overflow-hidden">
+                                    <div className={d.color + " h-full rounded-full transition-all duration-500"} style={{ width: Math.min(100, (d.val / d.max) * 100) + '%' }} />
+                                  </div>
+                                  <span className="text-[6px] font-mono font-medium text-muted-foreground/70 leading-none">{d.val}</span>
+                                </div>
+                              </TooltipTrigger><TooltipContent side="bottom" className="text-[9px]">
+                                <div className="font-medium">{d.label}: {d.val}/{d.max} ({Math.round(d.val / d.max * 100)}%)</div>
+                              </TooltipContent></Tooltip></TooltipProvider>
+                            ))}
                           </div>
                         </div>
                       </motion.div>

@@ -160,19 +160,72 @@ export async function POST(request: NextRequest) {
     const elapsed = Date.now() - startTime;
     log.log('info', 'DailyPicks:Compute', `Batch persisted: ${batch.id} (${elapsed}ms)`);
 
+    // 7. Evaluate yesterday's batch outcomes (A.4)
+    //    After computing today's picks, check if yesterday's batch
+    //    has pending outcomes and evaluate them.
+    let outcomeResult: { batchDate: string; evaluatedCount: number; hitRate: number; avgReturn: number; totalReturn: number; evaluatedAt: string } | null = null;
+    try {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+      const pendingBatch = await prisma.dailyPickBatch.findFirst({
+        where: { batchDate: yesterdayStr, outcomeStatus: 'pending' },
+        include: { picks: { where: { isNextInLine: false } } },
+      });
+      if (pendingBatch && pendingBatch.picks.length > 0) {
+        const symbols = pendingBatch.picks.map(p => p.symbol);
+        const quotes = await fetchQuotesLive(symbols);
+        let hits = 0, totalReturn = 0, evaluatedCount = 0;
+        for (const pick of pendingBatch.picks) {
+          const q = quotes[pick.symbol];
+          if (!q || !q.close) continue;
+          const returnPct = pick.entryPrice > 0 ? ((q.close - pick.entryPrice) / pick.entryPrice) * 100 : 0;
+          const slHit = (q.low || q.close) <= pick.stopLoss;
+          const tp1Hit = pick.takeProfit1 ? (q.high || q.close) >= pick.takeProfit1 : false;
+          let note = '';
+          if (slHit) note = `وقف خسارة عند ${(q.low || q.close).toFixed(2)}`;
+          else if (tp1Hit) note = `وصل المستهدف الأول ${pick.takeProfit1?.toFixed(2)}`;
+          else note = `عائد ${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%`;
+          await prisma.dailyPickRecord.update({
+            where: { id: pick.id },
+            data: {
+              nextDayOpen: q.close, nextDayClose: q.close,
+              maxPrice: q.high || q.close, minPrice: q.low || q.close,
+              realizedReturn: Math.round(returnPct * 100) / 100,
+              stopHit: slHit, tp1Hit, outcomeNote: note,
+            },
+          });
+          if (returnPct > 0) hits++;
+          totalReturn += returnPct;
+          evaluatedCount++;
+        }
+        const avgRet = evaluatedCount > 0 ? totalReturn / evaluatedCount : 0;
+        const hitRateVal = evaluatedCount > 0 ? (hits / evaluatedCount) * 100 : 0;
+        const outcomeData = {
+          evaluatedAt: new Date().toISOString(), evaluatedCount,
+          hitRate: Math.round(hitRateVal * 10) / 10,
+          avgReturn: Math.round(avgRet * 100) / 100,
+          totalReturn: Math.round(totalReturn * 100) / 100,
+        };
+        await prisma.dailyPickBatch.update({
+          where: { id: pendingBatch.id },
+          data: { outcomeStatus: 'evaluated', outcomeJson: JSON.stringify(outcomeData) },
+        });
+        outcomeResult = { batchDate: yesterdayStr, ...outcomeData };
+        log.log('info', 'DailyPicks:Compute', `Evaluated yesterday's outcomes: hitRate=${hitRateVal.toFixed(1)}%, avgReturn=${avgRet.toFixed(2)}%`);
+      }
+    } catch (e) {
+      log.log('warn', 'DailyPicks:Compute', `Outcome evaluation failed (non-critical): ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     return NextResponse.json({
       status: 'success',
-      batchId: batch.id,
-      batchDate,
-      version: result.version,
-      picks: result.picks.length,
-      nextInLine: result.nextInLine.length,
-      fundamentalPass: result.fundamentalPass,
-      technicalPass: result.technicalPass,
-      totalUniverse: result.totalUniverse,
-      countNote: result.countNote,
-      marketContext,
-      elapsedMs: elapsed,
+      batchId: batch.id, batchDate, version: result.version,
+      picks: result.picks.length, nextInLine: result.nextInLine.length,
+      fundamentalPass: result.fundamentalPass, technicalPass: result.technicalPass,
+      totalUniverse: result.totalUniverse, countNote: result.countNote,
+      marketContext, elapsedMs: elapsed,
+      outcomeEvaluation: outcomeResult,
     });
   } catch (error) {
     log.log('error', 'DailyPicks:Compute', `Failed: ${error instanceof Error ? error.message : String(error)}`);
